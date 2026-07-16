@@ -1,0 +1,13 @@
+{
+  "name": "@caseledger/audit-verifier",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/verifier.test.ts",
+    "verify": "node src/cli.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
