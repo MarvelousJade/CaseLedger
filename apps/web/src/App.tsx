@@ -126,4 +126,3 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => Promise<voi
 }
 
 export default App
-

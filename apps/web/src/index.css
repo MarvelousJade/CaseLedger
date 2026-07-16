@@ -52,7 +52,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   outline: 3px solid rgba(61, 112, 168, 0.28);
   outline-offset: 2px;
 }
-
 button:disabled { cursor: not-allowed; opacity: 0.58; }
 
 h1, h2, h3, p { margin-top: 0; }
@@ -79,4 +78,3 @@ a { color: inherit; }
     transition-duration: 0.01ms !important;
   }
 }
-
