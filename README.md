@@ -2,6 +2,17 @@
 
 CaseLedger is a collaborative case and evidence workspace with a tamper-evident activity trail. It combines a responsive React interface, an ASP.NET Core API, REST commands, a GraphQL dashboard, relational persistence, and an independent Node.js audit verifier.
 
+## Live demo
+
+[Open the hosted CaseLedger demo](https://caseledger-demo.onrender.com)
+
+Sign in with the shared analyst account:
+
+- Email: `analyst@caseledger.dev`
+- Password: `Analyst123!`
+
+The free Render service may take about a minute to wake after inactivity. The hosted administrator credential remains private.
+
 ![CaseLedger dashboard](docs/screenshots/dashboard.png)
 
 ## What it demonstrates
@@ -9,7 +20,7 @@ CaseLedger is a collaborative case and evidence workspace with a tamper-evident 
 - React 19 and TypeScript 6 with responsive, accessible workflow states
 - ASP.NET Core 10 minimal APIs with cookie authentication and role authorization
 - REST for case commands and GraphQL for dashboard aggregation
-- EF Core with zero-configuration SQLite locally and PostgreSQL support for containers
+- EF Core with zero-configuration SQLite locally and PostgreSQL migrations for hosted deployments
 - SHA-256 chained audit events with immutable tracked history
 - Browser-side evidence hashing without retaining uploaded file contents
 - An independent, dependency-free Node.js 24 audit verifier
@@ -149,7 +160,7 @@ That single command runs:
 
 - TypeScript lint and production frontend build
 - .NET restore/build with warnings reported
-- Four API integration and tampering tests
+- Five API integration, rate-limiting, and tampering tests
 - Six independent Node.js verifier tests
 
 ## Container deployment
@@ -163,6 +174,8 @@ docker compose up --build
 
 Open `http://localhost:5150`. Docker remains optional; local development uses SQLite and requires no database service.
 
+The public demo runs on Render from an immutable GHCR image published after CI succeeds. Its PostgreSQL data is hosted by Neon.
+
 ## Repository layout
 
 ```text
@@ -172,15 +185,17 @@ apps/
 tests/api/              End-to-end API and tamper-detection tests
 tools/audit-verifier/   Independent Node.js verifier and tests
 docs/                   Architecture notes and screenshots
+.github/workflows/      CI and container image publishing
 compose.yaml            PostgreSQL deployment
 Dockerfile              Multi-stage web/API image
+render.yaml             Render Blueprint configuration
 ```
 
 ## Deliberate tradeoffs
 
 - Evidence bytes are not retained. The browser hashes a selected file and sends only metadata; a production collector would hash again server-side and store content in controlled object storage.
 - A hash chain is tamper-evident, not an external trust anchor. A database administrator who can rewrite the entire chain could recompute it; production hardening would periodically publish signed chain heads to separate storage.
-- `EnsureCreated` keeps the demo portable. A production service would use reviewed EF Core migrations.
+- SQLite uses `EnsureCreated` for zero-configuration local development; hosted PostgreSQL uses checked-in EF Core migrations.
 - Seeded cookie authentication keeps the workflow immediately testable. Production deployment would use an external identity provider, anti-forgery protection, secret management, and stricter cookie policy.
 
 ## License
