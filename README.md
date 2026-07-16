@@ -34,9 +34,9 @@ Open `http://localhost:5173`. The first run creates and seeds a local SQLite dat
 | Role | Email | Password | Access |
 | --- | --- | --- | --- |
 | Analyst | `analyst@caseledger.dev` | `Analyst123!` | Standard case workflows |
-| Administrator | `admin@caseledger.dev` | `Admin123!` | Standard workflows and audit export |
+| Administrator | `admin@caseledger.dev` | `Admin123!` locally; `Seed__AdminPassword` when hosted | Standard workflows and audit export |
 
-These accounts are deterministic demonstration credentials, not a production identity design.
+These accounts are deterministic demonstration credentials, not a production identity design. Hosted deployments must provide a private `Seed__AdminPassword`; the public login screen only fills the shared analyst account.
 
 ## Core workflow
 
@@ -186,4 +186,3 @@ Dockerfile              Multi-stage web/API image
 ## License
 
 [MIT](LICENSE)
-

@@ -16,11 +16,19 @@ public static class ApiEndpoints
         var api = endpoints.MapGroup("/api");
         var auth = api.MapGroup("/auth");
 
-        auth.MapPost("/login", LoginAsync).AllowAnonymous();
-        auth.MapGet("/me", MeAsync).RequireAuthorization();
-        auth.MapPost("/logout", LogoutAsync).RequireAuthorization();
+        auth.MapPost("/login", LoginAsync)
+            .AllowAnonymous()
+            .RequireRateLimiting("login");
+        auth.MapGet("/me", MeAsync)
+            .RequireAuthorization()
+            .RequireRateLimiting("authenticated");
+        auth.MapPost("/logout", LogoutAsync)
+            .RequireAuthorization()
+            .RequireRateLimiting("authenticated");
 
-        api.MapGet("/users", GetUsersAsync).RequireAuthorization();
+        api.MapGet("/users", GetUsersAsync)
+            .RequireAuthorization()
+            .RequireRateLimiting("authenticated");
         api.MapCaseEndpoints();
 
         return endpoints;

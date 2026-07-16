@@ -77,6 +77,7 @@
 .section-divider { display: flex; align-items: center; gap: 12px; margin: 25px 0 14px; color: #8ba098; font-size: 9px; font-weight: 800; letter-spacing: .9px; text-transform: uppercase; }
 .section-divider::before, .section-divider::after { content: ''; height: 1px; flex: 1; background: var(--ink-150); }
 .credential-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.credential-grid--single { grid-template-columns: 1fr; }
 .credential-card { min-width: 0; display: grid; grid-template-columns: 30px minmax(0, 1fr) 14px; align-items: center; gap: 8px; padding: 10px; text-align: left; border: 1px solid var(--ink-150); border-radius: 9px; background: white; cursor: pointer; transition: border-color .18s, transform .18s, box-shadow .18s; }
 .credential-card:hover { transform: translateY(-1px); border-color: #9cb7ad; box-shadow: var(--shadow-sm); }
 .credential-card > span:nth-child(2) { min-width: 0; display: grid; gap: 2px; }

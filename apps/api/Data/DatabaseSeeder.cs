@@ -10,7 +10,9 @@ namespace CaseLedger.Api.Data;
 public sealed class DatabaseSeeder(
     CaseLedgerDbContext db,
     PasswordService passwords,
-    AuditChainService auditChain)
+    AuditChainService auditChain,
+    IConfiguration configuration,
+    IHostEnvironment environment)
 {
     public static readonly Guid AdminId = Guid.Parse("10000000-0000-0000-0000-000000000001");
     public static readonly Guid AnalystId = Guid.Parse("10000000-0000-0000-0000-000000000002");
@@ -19,6 +21,18 @@ public sealed class DatabaseSeeder(
     {
         if (!await db.Users.AnyAsync(cancellationToken))
         {
+            var adminPassword = configuration["Seed:AdminPassword"];
+            if (string.IsNullOrWhiteSpace(adminPassword))
+            {
+                if (environment.IsProduction())
+                {
+                    throw new InvalidOperationException(
+                        "Seed:AdminPassword is required in Production.");
+                }
+
+                adminPassword = "Admin123!";
+            }
+
             db.Users.AddRange(
                 new User
                 {
@@ -27,7 +41,7 @@ public sealed class DatabaseSeeder(
                     Email = "admin@caseledger.dev",
                     NormalizedEmail = "ADMIN@CASELEDGER.DEV",
                     Role = "Admin",
-                    PasswordHash = passwords.HashPassword("Admin123!", "caseledger-admin")
+                    PasswordHash = passwords.HashPassword(adminPassword, "caseledger-admin")
                 },
                 new User
                 {

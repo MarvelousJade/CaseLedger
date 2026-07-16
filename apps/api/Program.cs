@@ -1,4 +1,6 @@
 using System.Text.Json.Serialization;
+using System.Security.Claims;
+using System.Threading.RateLimiting;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Endpoints;
 using CaseLedger.Api.GraphQL;
@@ -26,6 +28,13 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =
 
 var databaseProvider = builder.Configuration["Database:Provider"] ?? "Sqlite";
 var connectionString = builder.Configuration.GetConnectionString("CaseLedger");
+if (builder.Environment.IsProduction() &&
+    databaseProvider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException(
+        "Production requires Database:Provider=PostgreSQL so data is not stored on ephemeral disk.");
+}
+
 builder.Services.AddDbContext<CaseLedgerDbContext>(options =>
 {
     if (databaseProvider.Equals("PostgreSQL", StringComparison.OrdinalIgnoreCase))
@@ -48,6 +57,32 @@ builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddScoped<AuditChainService>();
 builder.Services.AddScoped<DatabaseSeeder>();
 
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 10,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+    options.AddPolicy("authenticated", context => RateLimitPartition.GetFixedWindowLimiter(
+        context.User.FindFirstValue(ClaimTypes.NameIdentifier) ??
+        context.Connection.RemoteIpAddress?.ToString() ??
+        "unknown",
+        _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 120,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0
+        }));
+});
+
+var requireSecureCookies = builder.Configuration.GetValue(
+    "Security:RequireSecureCookies",
+    builder.Environment.IsProduction());
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
@@ -56,7 +91,9 @@ builder.Services
         options.Cookie.HttpOnly = true;
         options.Cookie.IsEssential = true;
         options.Cookie.SameSite = SameSiteMode.Lax;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        options.Cookie.SecurePolicy = requireSecureCookies
+            ? CookieSecurePolicy.Always
+            : CookieSecurePolicy.SameAsRequest;
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
         options.Events.OnRedirectToLogin = context => WriteAuthProblemAsync(
@@ -92,17 +129,27 @@ app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseCors();
 app.UseAuthentication();
+app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).AllowAnonymous();
 app.MapCaseLedgerApi();
-app.MapGraphQL("/graphql").RequireAuthorization();
+app.MapGraphQL("/graphql")
+    .RequireAuthorization()
+    .RequireRateLimiting("authenticated");
 app.MapFallbackToFile("index.html");
 
 await using (var scope = app.Services.CreateAsyncScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<CaseLedgerDbContext>();
-    await db.Database.EnsureCreatedAsync();
+    if (db.Database.IsNpgsql())
+    {
+        await db.Database.MigrateAsync();
+    }
+    else
+    {
+        await db.Database.EnsureCreatedAsync();
+    }
     var seeder = scope.ServiceProvider.GetRequiredService<DatabaseSeeder>();
     await seeder.SeedAsync();
 }

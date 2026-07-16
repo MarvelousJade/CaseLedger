@@ -23,14 +23,9 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (user: User) =
     }
   }
 
-  const fillCredentials = (kind: 'analyst' | 'admin') => {
-    if (kind === 'analyst') {
-      setEmail('analyst@caseledger.dev')
-      setPassword('Analyst123!')
-    } else {
-      setEmail('admin@caseledger.dev')
-      setPassword('Admin123!')
-    }
+  const fillCredentials = () => {
+    setEmail('analyst@caseledger.dev')
+    setPassword('Analyst123!')
     setError('')
   }
 
@@ -97,15 +92,12 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (user: User) =
 
           <div className="demo-access">
             <div className="section-divider"><span>Demo access</span></div>
-            <div className="credential-grid">
-              <button type="button" className="credential-card" onClick={() => fillCredentials('analyst')}>
+            <div className="credential-grid credential-grid--single">
+              <button type="button" className="credential-card" onClick={fillCredentials}>
                 <span className="avatar avatar--green">AN</span><span><b>Analyst</b><small>analyst@caseledger.dev</small></span><Icon name="arrow-right" size={16} />
               </button>
-              <button type="button" className="credential-card" onClick={() => fillCredentials('admin')}>
-                <span className="avatar avatar--amber">AD</span><span><b>Administrator</b><small>admin@caseledger.dev</small></span><Icon name="arrow-right" size={16} />
-              </button>
             </div>
-            <p className="credential-hint">Select an account to fill its credentials.</p>
+            <p className="credential-hint">Use the shared analyst account to explore the workspace.</p>
           </div>
         </div>
         <p className="login-footer"><Icon name="shield" size={14} /> Protected by secure, HTTP-only session cookies</p>

@@ -14,7 +14,9 @@ public static class CaseEndpoints
 
     public static RouteGroupBuilder MapCaseEndpoints(this RouteGroupBuilder api)
     {
-        var cases = api.MapGroup("/cases").RequireAuthorization();
+        var cases = api.MapGroup("/cases")
+            .RequireAuthorization()
+            .RequireRateLimiting("authenticated");
 
         cases.MapGet("", GetCasesAsync);
         cases.MapPost("", CreateCaseAsync);
