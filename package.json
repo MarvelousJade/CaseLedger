@@ -1,0 +1,21 @@
+{
+  "name": "caseledger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Collaborative case and evidence tracking with a verifiable audit trail.",
+  "scripts": {
+    "setup": "npm install --prefix apps/web",
+    "dev": "concurrently --kill-others --names api,web \"dotnet watch --project apps/api --urls http://localhost:5150\" \"npm run dev --prefix apps/web\"",
+    "build": "dotnet build CaseLedger.slnx && npm run build --prefix apps/web",
+    "test": "dotnet test CaseLedger.slnx && npm test --prefix tools/audit-verifier",
+    "lint": "npm run lint --prefix apps/web",
+    "check": "npm run lint && npm run build && npm run test"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
+
