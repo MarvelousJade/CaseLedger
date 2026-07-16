@@ -1,0 +1,15 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+**/wwwroot/assets/
+*.db
+*.db-shm
+*.db-wal
+.env
+.DS_Store
+.idea/
+.vscode/
+TestResults/
+coverage/
+
