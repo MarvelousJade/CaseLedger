@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: caseledger
+    runtime: docker
+    plan: free
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PORT
+        value: "8080"
+      - key: ASPNETCORE_ENVIRONMENT
+        value: Production
+      - key: Database__Provider
+        value: PostgreSQL
+      - key: ConnectionStrings__CaseLedger
+        sync: false
+      - key: Seed__AdminPassword
+        generateValue: true
