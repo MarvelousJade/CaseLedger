@@ -1,17 +1,12 @@
 name: Publish container image
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - Dockerfile
-      - apps/**
-      - .github/workflows/publish-image.yml
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  packages: write
+permissions: {}
 
 concurrency:
   group: publish-caseledger-container
@@ -19,13 +14,26 @@ concurrency:
 
 jobs:
   publish:
-    if: github.repository == 'MarvelousJade/CaseLedger'
+    if: >-
+      github.repository == 'MarvelousJade/CaseLedger' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.conclusion == 'success'))
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          ref: ${{ env.IMAGE_SHA }}
 
       - name: Set image name
         run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/caseledger" >> "$GITHUB_ENV"
@@ -36,14 +44,14 @@ jobs:
       - name: Build container image
         run: |
           docker build \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --tag "$IMAGE_NAME:$GITHUB_SHA" \
+            --label "org.opencontainers.image.revision=$IMAGE_SHA" \
+            --tag "$IMAGE_NAME:$IMAGE_SHA" \
             --tag "$IMAGE_NAME:latest" \
             .
 
       - name: Push container image
         run: |
-          docker push "$IMAGE_NAME:$GITHUB_SHA"
+          docker push "$IMAGE_NAME:$IMAGE_SHA"
           docker push "$IMAGE_NAME:latest"
 
       - name: Log out of GitHub Container Registry
