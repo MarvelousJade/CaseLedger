@@ -33,7 +33,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   const contentType = response.headers.get('content-type') ?? ''
   let payload: unknown = null
-  if (contentType.includes('application/json')) {
+  if (contentType.includes('application/json') || contentType.includes('+json')) {
     payload = await response.json().catch(() => null)
   } else {
     payload = await response.text().catch(() => '')
@@ -309,4 +309,3 @@ export function isUnauthorised(error: unknown) {
 export function getErrorMessage(error: unknown, fallback = 'Something went wrong. Please try again.') {
   return error instanceof Error && error.message ? error.message : fallback
 }
-
