@@ -14,6 +14,9 @@ COPY --from=web-build /source/apps/web/dist apps/api/wwwroot/
 RUN dotnet publish apps/api/CaseLedger.Api.csproj --configuration Release --no-restore --output /out
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS runtime
+LABEL org.opencontainers.image.source="https://github.com/MarvelousJade/CaseLedger" \
+      org.opencontainers.image.description="CaseLedger full-stack case management demo" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 COPY --from=api-build /out ./
 RUN mkdir /data && chown "$APP_UID" /data
@@ -23,4 +26,3 @@ EXPOSE 8080
 VOLUME ["/data"]
 USER $APP_UID
 ENTRYPOINT ["dotnet", "CaseLedger.Api.dll"]
-

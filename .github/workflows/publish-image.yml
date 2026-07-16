@@ -1,0 +1,51 @@
+name: Publish container image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - apps/**
+      - .github/workflows/publish-image.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-caseledger-container
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    if: github.repository == 'MarvelousJade/CaseLedger'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set image name
+        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/caseledger" >> "$GITHUB_ENV"
+
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: Build container image
+        run: |
+          docker build \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$IMAGE_NAME:$GITHUB_SHA" \
+            --tag "$IMAGE_NAME:latest" \
+            .
+
+      - name: Push container image
+        run: |
+          docker push "$IMAGE_NAME:$GITHUB_SHA"
+          docker push "$IMAGE_NAME:latest"
+
+      - name: Log out of GitHub Container Registry
+        if: always()
+        run: docker logout ghcr.io
