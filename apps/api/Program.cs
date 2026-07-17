@@ -7,6 +7,7 @@ using CaseLedger.Api.EvidenceStorage;
 using CaseLedger.Api.GraphQL;
 using CaseLedger.Api.Messaging;
 using CaseLedger.Api.Realtime;
+using CaseLedger.Api.Security;
 using CaseLedger.Api.Services;
 using CaseLedger.Api.Webhooks;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -19,6 +20,7 @@ using Npgsql;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddCaseLedgerObservability();
 
+builder.Services.AddCaseLedgerDataProtection(builder.Configuration);
 builder.Services.AddExceptionHandler<AuditVerificationMessageTooLargeExceptionHandler>();
 builder.Services.AddProblemDetails(options =>
 {
