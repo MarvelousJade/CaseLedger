@@ -22,7 +22,7 @@ class ApiError extends Error {
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body && !headers.has('Content-Type')) {
+  if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
 
@@ -297,11 +297,13 @@ export const api = {
     })
   },
 
-  async addEvidence(id: string, input: Omit<Evidence, 'id' | 'addedByName' | 'createdAt'>) {
-    return request<unknown>(`/api/cases/${encodeURIComponent(id)}/evidence`, {
+  async addEvidence(id: string, file: File): Promise<Evidence> {
+    const body = new FormData()
+    body.append('file', file, file.name)
+    return normaliseEvidence(await request<unknown>(`/api/cases/${encodeURIComponent(id)}/evidence`, {
       method: 'POST',
-      body: JSON.stringify(input),
-    })
+      body,
+    }))
   },
 
   async verifyAudit(id: string): Promise<IntegrityResult> {

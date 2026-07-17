@@ -6,6 +6,7 @@
 *.db
 *.db-shm
 *.db-wal
+/apps/api/App_Data/
 .env
 .env.*
 !.env.example

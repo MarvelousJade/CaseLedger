@@ -82,6 +82,39 @@ describe('case API contract', () => {
     expect(result.version).toBe(nextVersion)
   })
 
+  it('uploads evidence bytes as multipart data without overriding its boundary', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      fileName: 'server-hash.txt',
+      sizeBytes: 14,
+      mediaType: 'text/plain',
+      sha256: 'a'.repeat(64),
+      addedByName: 'Avery Singh',
+      createdAt: '2026-07-17T12:00:00.000Z',
+    }))
+    const file = new File(['evidence bytes'], 'server-hash.txt', { type: 'text/plain' })
+
+    const evidence = await api.addEvidence(caseId, file)
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    const [path, init] = fetchMock.mock.calls[0]
+    const headers = new Headers(init?.headers)
+    const body = init?.body as FormData
+    expect(path).toBe(`/api/cases/${caseId}/evidence`)
+    expect(init).toMatchObject({ method: 'POST', credentials: 'include' })
+    expect(headers.has('Content-Type')).toBe(false)
+    expect(body).toBeInstanceOf(FormData)
+    const uploaded = body.get('file')
+    expect(uploaded).toBeInstanceOf(File)
+    expect((uploaded as File).name).toBe(file.name)
+    expect((uploaded as File).type).toBe(file.type)
+    expect(await (uploaded as File).text()).toBe('evidence bytes')
+    expect(evidence).toMatchObject({
+      fileName: 'server-hash.txt',
+      sha256: 'a'.repeat(64),
+    })
+  })
+
   it('queues and reads durable audit verification jobs', async () => {
     const requestedAt = '2026-07-17T02:00:00.000Z'
     const completedAt = '2026-07-17T02:00:01.000Z'

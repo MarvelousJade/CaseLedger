@@ -152,9 +152,9 @@ export function EvidenceSection({ item, addEvidence, uploading, uploadMessage }:
       <label className={`evidence-drop ${uploading ? 'evidence-drop--busy' : ''}`}>
         <input type="file" onChange={addEvidence} disabled={uploading} />
         <span className="evidence-drop__icon">{uploading ? <span className="spinner" /> : <Icon name="upload" size={23} />}</span>
-        <span><b>{uploading ? uploadMessage : 'Fingerprint a file'}</b><small>{uploading ? 'Keep this panel open while the hash is calculated.' : 'Select any file to calculate and register its SHA-256 digest.'}</small></span>
+        <span><b>{uploading ? uploadMessage : 'Upload evidence'}</b><small>{uploading ? 'Keep this panel open while the file is stored and hashed.' : 'CaseLedger stores the file and computes its SHA-256 digest on the server.'}</small></span>
       </label>
-      <p className="evidence-note"><Icon name="shield" size={14} /> Only file metadata and its cryptographic fingerprint are recorded.</p>
+      <p className="evidence-note"><Icon name="shield" size={14} /> Evidence uses generated storage keys; uploaded names are never used as file paths.</p>
       {item.evidence.length ? (
         <div className="evidence-list">{item.evidence.map((evidence) => (
           <article key={evidence.id}>
@@ -163,7 +163,7 @@ export function EvidenceSection({ item, addEvidence, uploading, uploadMessage }:
             <span className="verified-mini"><Icon name="check" size={12} /> Hashed</span>
           </article>
         ))}</div>
-      ) : <EmptyState compact icon="document" title="No evidence registered" message="Fingerprint a file to preserve its identity in this case." />}
+      ) : <EmptyState compact icon="document" title="No evidence uploaded" message="Upload a file to store it and preserve its server-computed fingerprint." />}
     </div>
   )
 }

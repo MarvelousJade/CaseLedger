@@ -66,6 +66,8 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:5151:8080"
+    volumes:
+      - e2e-app-data:/data
 
   audit-worker:
     build:
@@ -84,5 +86,6 @@ services:
         condition: service_healthy
 
 volumes:
+  e2e-app-data:
   e2e-postgres-data:
   e2e-rabbitmq-data:

@@ -1,4 +1,5 @@
 using CaseLedger.Api.Data;
+using CaseLedger.Api.EvidenceStorage;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Data.Sqlite;
@@ -16,6 +17,11 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
     private readonly string databasePath = Path.Combine(
         Path.GetTempPath(),
         $"caseledger-tests-{Guid.NewGuid():N}.db");
+    private readonly string evidenceStoragePath = Path.Combine(
+        Path.GetTempPath(),
+        $"caseledger-evidence-tests-{Guid.NewGuid():N}");
+
+    public string EvidenceStoragePath => evidenceStoragePath;
 
     public CaseLedgerFactory(
         bool messagingEnabled = false,
@@ -34,6 +40,8 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
             {
                 ["Database:Provider"] = "Sqlite",
                 ["ConnectionStrings:CaseLedger"] = $"Data Source={databasePath}",
+                ["EvidenceStorage:Provider"] = "Local",
+                ["EvidenceStorage:Local:RootPath"] = evidenceStoragePath,
                 ["Messaging:Enabled"] = messagingEnabled.ToString(),
                 ["Messaging:Provider"] = messagingProvider
             });
@@ -44,6 +52,21 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
             services.RemoveAll<CaseLedgerDbContext>();
             services.AddDbContext<CaseLedgerDbContext>(options =>
                 options.UseSqlite($"Data Source={databasePath}"));
+
+            services.RemoveAll<EvidenceStorageRuntimeOptions>();
+            services.RemoveAll<IEvidenceObjectStore>();
+            services.RemoveAll<EvidenceUploadService>();
+            var evidenceOptions = new EvidenceStorageRuntimeOptions(
+                EvidenceStorageProviderKind.Local,
+                EvidenceStorageOptions.DefaultMaxFileSizeBytes,
+                evidenceStoragePath,
+                null,
+                null,
+                null);
+            services.AddSingleton(evidenceOptions);
+            services.AddSingleton<IEvidenceObjectStore>(
+                new LocalEvidenceObjectStore(evidenceOptions));
+            services.AddSingleton<EvidenceUploadService>();
         });
     }
 
@@ -59,6 +82,11 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
         if (File.Exists(databasePath))
         {
             File.Delete(databasePath);
+        }
+
+        if (Directory.Exists(evidenceStoragePath))
+        {
+            Directory.Delete(evidenceStoragePath, recursive: true);
         }
     }
 }

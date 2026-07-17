@@ -1,9 +1,11 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
 using System.Security.Claims;
 using System.Text.Json;
 using CaseLedger.Api.Contracts;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Domain;
+using CaseLedger.Api.EvidenceStorage;
 using CaseLedger.Api.Messaging;
 using CaseLedger.Api.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -65,12 +67,18 @@ public static class CaseEndpoints
             .Produces(StatusCodes.Status429TooManyRequests);
         cases.MapPost("/{id:guid}/evidence", AddEvidenceAsync)
             .WithName("AddCaseEvidence")
-            .WithSummary("Register evidence metadata and its digest")
+            .WithSummary("Upload evidence and record its server-computed digest")
+            .WithDescription(
+                "Send multipart/form-data with one 'file' part to persist evidence bytes and compute SHA-256 on the server. " +
+                "The application/json metadata-only request remains available for compatibility only.")
+            .Accepts<AddEvidenceRequest>("application/json", "multipart/form-data")
             .Produces<EvidenceResponse>(StatusCodes.Status201Created)
             .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
             .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
             .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
             .Produces<ProblemDetails>(StatusCodes.Status409Conflict)
+            .Produces<ProblemDetails>(StatusCodes.Status413PayloadTooLarge)
+            .Produces<ProblemDetails>(StatusCodes.Status415UnsupportedMediaType)
             .Produces(StatusCodes.Status429TooManyRequests);
         cases.MapGet("/{id:guid}/audit", GetAuditAsync)
             .WithName("GetCaseAudit")
@@ -628,14 +636,95 @@ public static class CaseEndpoints
 
     private static async Task<IResult> AddEvidenceAsync(
         Guid id,
-        AddEvidenceRequest request,
+        HttpRequest httpRequest,
         ClaimsPrincipal principal,
         CaseLedgerDbContext db,
         AuditChainService auditChain,
         CaseLedgerTelemetry telemetry,
+        EvidenceUploadService uploads,
         CancellationToken cancellationToken)
     {
-        var errors = ValidateEvidence(request);
+        AddEvidenceRequest request;
+        IFormFile? uploadedFile = null;
+        Dictionary<string, string[]> errors;
+
+        if (httpRequest.HasFormContentType)
+        {
+            if (httpRequest.ContentLength > uploads.MultipartBodyLengthLimit)
+            {
+                return EvidencePayloadTooLarge(uploads.MaxFileSizeBytes);
+            }
+
+            IFormCollection form;
+            try
+            {
+                form = await httpRequest.ReadFormAsync(cancellationToken);
+            }
+            catch (InvalidDataException)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["file"] = ["The multipart request body is invalid."]
+                });
+            }
+            catch (BadHttpRequestException exception)
+            {
+                return Results.Problem(
+                    statusCode: exception.StatusCode,
+                    title: "Invalid evidence upload");
+            }
+
+            uploadedFile = form.Files.GetFile("file");
+            if (uploadedFile is null || form.Files.Count != 1)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["file"] = ["Exactly one multipart file named 'file' is required."]
+                });
+            }
+
+            request = new AddEvidenceRequest(
+                uploadedFile.FileName,
+                uploadedFile.Length,
+                string.IsNullOrWhiteSpace(uploadedFile.ContentType)
+                    ? "application/octet-stream"
+                    : uploadedFile.ContentType.Trim(),
+                null);
+            if (uploadedFile.Length > uploads.MaxFileSizeBytes)
+            {
+                return EvidencePayloadTooLarge(uploads.MaxFileSizeBytes);
+            }
+
+            errors = ValidateEvidenceUpload(request, uploads.MaxFileSizeBytes);
+        }
+        else if (IsJsonContentType(httpRequest.ContentType))
+        {
+            try
+            {
+                request = await httpRequest.ReadFromJsonAsync<AddEvidenceRequest>(
+                        RequestJsonOptions,
+                        cancellationToken) ??
+                    new AddEvidenceRequest(null, -1, null, null);
+            }
+            catch (JsonException)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]>
+                {
+                    ["body"] = ["The JSON request body is invalid."]
+                });
+            }
+
+            errors = ValidateEvidence(request);
+        }
+        else
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status415UnsupportedMediaType,
+                title: "Unsupported media type",
+                detail: "Use multipart/form-data to upload evidence bytes. " +
+                        "The application/json metadata-only shape is supported for compatibility only.");
+        }
+
         if (errors.Count > 0)
         {
             return Results.ValidationProblem(errors);
@@ -653,67 +742,102 @@ public static class CaseEndpoints
             return AuthenticationRequired();
         }
 
-        var now = DateTime.UtcNow;
-        var evidence = new Evidence
+        var evidenceId = Guid.NewGuid();
+        StagedEvidenceUpload? stagedUpload = null;
+        if (uploadedFile is not null)
         {
-            Id = Guid.NewGuid(),
-            CaseId = item.Id,
-            Case = item,
-            FileName = request.FileName!.Trim(),
-            SizeBytes = request.SizeBytes,
-            MediaType = request.MediaType!.Trim(),
-            Sha256 = request.Sha256!.Trim().ToLowerInvariant(),
-            AddedById = actor.Id,
-            AddedBy = actor,
-            CreatedAt = now
-        };
-        using var activity = telemetry.StartCaseOperation(
-            "caseledger.evidence.register",
-            item.Id);
-        activity?.SetTag("caseledger.evidence.id", evidence.Id.ToString("D"));
-        activity?.SetTag("caseledger.evidence.size_bytes", evidence.SizeBytes);
-
-        db.Evidence.Add(evidence);
-        item.UpdatedAt = now;
-        var auditEvent = await auditChain.AppendAsync(
-            item.Id,
-            "EvidenceAdded",
-            $"Evidence {evidence.FileName} added",
-            actor,
-            new Dictionary<string, object?>
+            try
             {
-                ["evidenceId"] = evidence.Id,
-                ["fileName"] = evidence.FileName,
-                ["mediaType"] = evidence.MediaType,
-                ["sha256"] = evidence.Sha256,
-                ["sizeBytes"] = evidence.SizeBytes
-            },
-            cancellationToken: cancellationToken);
+                await using var content = uploadedFile.OpenReadStream();
+                stagedUpload = await uploads.StageAsync(
+                    new EvidenceObjectId(item.Id, evidenceId),
+                    request.MediaType!,
+                    content,
+                    cancellationToken);
+                request = request with
+                {
+                    SizeBytes = stagedUpload.SizeBytes,
+                    Sha256 = stagedUpload.Sha256
+                };
+            }
+            catch (EvidenceUploadTooLargeException exception)
+            {
+                return EvidencePayloadTooLarge(exception.MaxFileSizeBytes);
+            }
+        }
+
         try
         {
-            await db.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateConcurrencyException)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, "concurrency_conflict");
-            return CaseWriteConflict();
-        }
-        catch (Exception exception)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
-            throw;
-        }
+            var now = DateTime.UtcNow;
+            var evidence = new Evidence
+            {
+                Id = evidenceId,
+                CaseId = item.Id,
+                Case = item,
+                FileName = request.FileName!.Trim(),
+                SizeBytes = request.SizeBytes,
+                MediaType = request.MediaType!.Trim(),
+                Sha256 = request.Sha256!.Trim().ToLowerInvariant(),
+                AddedById = actor.Id,
+                AddedBy = actor,
+                CreatedAt = now
+            };
+            using var activity = telemetry.StartCaseOperation(
+                "caseledger.evidence.register",
+                item.Id);
+            activity?.SetTag("caseledger.evidence.id", evidence.Id.ToString("D"));
+            activity?.SetTag("caseledger.evidence.size_bytes", evidence.SizeBytes);
 
-        auditChain.RecordAppendCommitted(auditEvent);
-        telemetry.RecordEvidenceRegistered(
-            item.Id,
-            evidence.Id,
-            evidence.MediaType,
-            evidence.SizeBytes);
-        activity?.SetStatus(ActivityStatusCode.Ok);
-        return Results.Created(
-            $"/api/cases/{item.Id:D}/evidence/{evidence.Id:D}",
-            CaseMappings.ToEvidence(evidence));
+            db.Evidence.Add(evidence);
+            item.UpdatedAt = now;
+            var auditEvent = await auditChain.AppendAsync(
+                item.Id,
+                "EvidenceAdded",
+                $"Evidence {evidence.FileName} added",
+                actor,
+                new Dictionary<string, object?>
+                {
+                    ["evidenceId"] = evidence.Id,
+                    ["fileName"] = evidence.FileName,
+                    ["mediaType"] = evidence.MediaType,
+                    ["sha256"] = evidence.Sha256,
+                    ["sizeBytes"] = evidence.SizeBytes
+                },
+                cancellationToken: cancellationToken);
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateConcurrencyException)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, "concurrency_conflict");
+                return CaseWriteConflict();
+            }
+            catch (Exception exception)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+                throw;
+            }
+
+            stagedUpload?.Complete();
+            auditChain.RecordAppendCommitted(auditEvent);
+            telemetry.RecordEvidenceRegistered(
+                item.Id,
+                evidence.Id,
+                evidence.MediaType,
+                evidence.SizeBytes);
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            return Results.Created(
+                $"/api/cases/{item.Id:D}/evidence/{evidence.Id:D}",
+                CaseMappings.ToEvidence(evidence));
+        }
+        finally
+        {
+            if (stagedUpload is not null)
+            {
+                await stagedUpload.DisposeAsync();
+            }
+        }
     }
 
     private static async Task<IResult> GetAuditAsync(
@@ -947,6 +1071,59 @@ public static class CaseEndpoints
 
         return errors;
     }
+
+    private static Dictionary<string, string[]> ValidateEvidenceUpload(
+        AddEvidenceRequest request,
+        long maxFileSizeBytes)
+    {
+        var errors = new Dictionary<string, string[]>();
+        ValidateText(request.FileName, 1, 255, "fileName", errors);
+        ValidateText(request.MediaType, 3, 150, "mediaType", errors);
+
+        var fileName = request.FileName?.Trim();
+        if (fileName is not null &&
+            (fileName is "." or ".." ||
+             fileName.IndexOfAny(['/', '\\']) >= 0 ||
+             fileName.Any(char.IsControl)))
+        {
+            errors["fileName"] = ["File name must be a plain name without path separators or control characters."];
+        }
+
+        if (request.SizeBytes < 0)
+        {
+            errors["sizeBytes"] = ["Size must be zero or greater."];
+        }
+        else if (request.SizeBytes > maxFileSizeBytes)
+        {
+            errors["sizeBytes"] = [$"Size must not exceed {maxFileSizeBytes} bytes."];
+        }
+
+        if (!MediaTypeHeaderValue.TryParse(request.MediaType, out var mediaType) ||
+            string.IsNullOrWhiteSpace(mediaType.MediaType))
+        {
+            errors["mediaType"] = ["Media type must be a valid Internet media type."];
+        }
+
+        return errors;
+    }
+
+    private static bool IsJsonContentType(string? contentType)
+    {
+        if (!MediaTypeHeaderValue.TryParse(contentType, out var parsed) ||
+            parsed.MediaType is null)
+        {
+            return false;
+        }
+
+        return parsed.MediaType.Equals("application/json", StringComparison.OrdinalIgnoreCase) ||
+               parsed.MediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static IResult EvidencePayloadTooLarge(long maxFileSizeBytes) =>
+        Results.Problem(
+            statusCode: StatusCodes.Status413PayloadTooLarge,
+            title: "Evidence file is too large",
+            detail: $"The maximum evidence file size is {maxFileSizeBytes} bytes.");
 
     private static bool ValidateText(
         string? value,

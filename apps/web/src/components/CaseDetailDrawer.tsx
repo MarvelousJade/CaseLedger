@@ -181,24 +181,14 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
     event.target.value = ''
     if (!file || !item) return
     setUploading(true)
-    setUploadMessage(`Hashing ${file.name}…`)
+    setUploadMessage(`Uploading ${file.name}…`)
     try {
-      const hashBuffer = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
-      const sha256 = Array.from(new Uint8Array(hashBuffer))
-        .map((byte) => byte.toString(16).padStart(2, '0'))
-        .join('')
-      setUploadMessage('Registering fingerprint…')
-      await api.addEvidence(item.id, {
-        fileName: file.name,
-        sizeBytes: file.size,
-        mediaType: file.type || 'application/octet-stream',
-        sha256,
-      })
-      notify(`${file.name} was fingerprinted and registered.`)
+      await api.addEvidence(item.id, file)
+      notify(`${file.name} was securely uploaded and hashed.`)
       reload()
       setTab('evidence')
     } catch (requestError) {
-      notify(getErrorMessage(requestError, 'Evidence could not be registered.'), 'danger')
+      notify(getErrorMessage(requestError, 'Evidence could not be uploaded.'), 'danger')
     } finally {
       setUploading(false)
       setUploadMessage('')

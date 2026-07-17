@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Threading.RateLimiting;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Endpoints;
+using CaseLedger.Api.EvidenceStorage;
 using CaseLedger.Api.GraphQL;
 using CaseLedger.Api.Messaging;
 using CaseLedger.Api.Realtime;
@@ -29,6 +30,7 @@ builder.Services.AddProblemDetails(options =>
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
+    options.OperationFilter<EvidenceUploadOperationFilter>();
     options.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "CaseLedger API",
@@ -82,6 +84,7 @@ builder.Services.AddDbContext<CaseLedgerDbContext>(options =>
 
 builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddScoped<AuditChainService>();
+builder.Services.AddEvidenceStorage(builder.Configuration, builder.Environment);
 builder.Services.Configure<MessagingOptions>(
     builder.Configuration.GetSection(MessagingOptions.SectionName));
 builder.Services.Configure<WebhookOptions>(

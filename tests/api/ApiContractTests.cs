@@ -41,6 +41,27 @@ public sealed class ApiContractTests
         Assert.True(responses.TryGetProperty("412", out _));
         Assert.True(responses.TryGetProperty("428", out _));
 
+        var evidenceOperation = paths
+            .GetProperty("/api/cases/{id}/evidence")
+            .GetProperty("post");
+        var evidenceRequestBody = evidenceOperation.GetProperty("requestBody");
+        Assert.Contains(
+            "compatibility-only",
+            evidenceRequestBody.GetProperty("description").GetString());
+        var evidenceContent = evidenceRequestBody.GetProperty("content");
+        var uploadFileSchema = evidenceContent
+            .GetProperty("multipart/form-data")
+            .GetProperty("schema")
+            .GetProperty("properties")
+            .GetProperty("file");
+        Assert.Equal("string", uploadFileSchema.GetProperty("type").GetString());
+        Assert.Equal("binary", uploadFileSchema.GetProperty("format").GetString());
+        Assert.True(evidenceContent
+            .GetProperty("application/json")
+            .GetProperty("schema")
+            .GetProperty("properties")
+            .TryGetProperty("sha256", out _));
+
         var schemas = root.GetProperty("components").GetProperty("schemas");
         var collectionSchema = schemas.GetProperty(nameof(CaseCollectionResponse));
         var collectionProperties = collectionSchema.GetProperty("properties");

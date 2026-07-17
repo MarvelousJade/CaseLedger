@@ -21,7 +21,8 @@ WORKDIR /app
 COPY --from=api-build /out ./
 RUN mkdir /data && chown "$APP_UID" /data
 ENV ASPNETCORE_HTTP_PORTS=8080 \
-    ConnectionStrings__CaseLedger="Data Source=/data/caseledger.db"
+    ConnectionStrings__CaseLedger="Data Source=/data/caseledger.db" \
+    EvidenceStorage__Local__RootPath=/data/evidence
 EXPOSE 8080
 VOLUME ["/data"]
 USER $APP_UID

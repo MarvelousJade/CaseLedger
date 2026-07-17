@@ -55,7 +55,7 @@ async function createCase(page: Page, title: string) {
 }
 
 test.describe.serial('case workflows', () => {
-  test('an analyst can sign in, create a case, and register an evidence fingerprint', async ({ page }) => {
+  test('an analyst can sign in, create a case, and upload hashed evidence', async ({ page }) => {
     await signIn(page)
     const title = `Evidence workflow ${randomUUID().slice(0, 8)}`
     const { caseDialog } = await createCase(page, title)
@@ -78,7 +78,7 @@ test.describe.serial('case workflows', () => {
     expect((await evidenceResponse).status()).toBe(201)
     await expect(caseDialog.getByText(fileName, { exact: true })).toBeVisible()
     await expect(caseDialog.getByText(expectedHash, { exact: true })).toBeVisible()
-    await expect(page.getByRole('status')).toContainText('fingerprinted and registered')
+    await expect(page.getByRole('status')).toContainText('securely uploaded and hashed')
   })
 
   test('verification detects an audit row changed directly in PostgreSQL', async ({ page }) => {

@@ -99,6 +99,34 @@ describe('CaseDetailDrawer status updates', () => {
   })
 })
 
+describe('CaseDetailDrawer evidence uploads', () => {
+  it('sends the selected file to the server without hashing it in the browser', async () => {
+    const browser = userEvent.setup()
+    const getCase = vi.spyOn(api, 'getCase').mockResolvedValue(currentCase)
+    const addEvidence = vi.spyOn(api, 'addEvidence').mockResolvedValue({
+      id: 'dddddddd-dddd-dddd-dddd-dddddddddddd',
+      fileName: 'server-hash.txt',
+      sizeBytes: 14,
+      mediaType: 'text/plain',
+      sha256: 'a'.repeat(64),
+      addedByName: 'Avery Singh',
+      createdAt: '2026-07-17T12:00:00.000Z',
+    })
+    const digest = vi.spyOn(crypto.subtle, 'digest')
+    const { notify, onMutate } = renderDrawer()
+
+    await browser.click(await screen.findByRole('tab', { name: /^Evidence/ }))
+    const file = new File(['evidence bytes'], 'server-hash.txt', { type: 'text/plain' })
+    await browser.upload(screen.getByLabelText(/Upload evidence/), file)
+
+    await waitFor(() => expect(addEvidence).toHaveBeenCalledWith(currentCase.id, file))
+    expect(digest).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith('server-hash.txt was securely uploaded and hashed.')
+    expect(onMutate).toHaveBeenCalledOnce()
+    await waitFor(() => expect(getCase).toHaveBeenCalledTimes(2))
+  })
+})
+
 describe('CaseDetailDrawer audit verification', () => {
   it('queues a verification and applies its realtime result', async () => {
     const browser = userEvent.setup()

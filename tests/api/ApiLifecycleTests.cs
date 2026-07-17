@@ -87,6 +87,7 @@ public sealed class ApiLifecycleTests
         Assert.Equal(HttpStatusCode.Created, evidenceResponse.StatusCode);
         var evidence = await evidenceResponse.Content.ReadRequiredJsonAsync<EvidenceResponse>();
         Assert.Equal(evidenceHash, evidence.Sha256);
+        Assert.False(Directory.Exists(factory.EvidenceStoragePath));
 
         var detail = await client.GetFromJsonAsync<CaseDetailResponse>($"/api/cases/{created.Id:D}");
         Assert.NotNull(detail);
