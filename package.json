@@ -7,7 +7,7 @@
     "setup": "npm install && npm install --prefix apps/web",
     "dev": "concurrently --kill-others --names api,web \"dotnet watch --project apps/api --urls http://localhost:5150\" \"npm run dev --prefix apps/web\"",
     "build": "dotnet build CaseLedger.slnx && npm run build --prefix apps/web",
-    "test": "dotnet test CaseLedger.slnx && npm test --prefix tools/audit-verifier",
+    "test": "dotnet test CaseLedger.slnx && npm test --prefix apps/web && npm test --prefix tools/audit-verifier",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "lint": "npm run lint --prefix apps/web",
