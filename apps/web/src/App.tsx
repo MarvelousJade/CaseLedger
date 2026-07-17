@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { api } from './api'
 import { BrandMark, Icon, type IconName } from './Icons'
-import type { User } from './types'
+import type { AuthCapabilities, User } from './types'
 import { initials, titleCase } from './utils'
 import { CaseDetailDrawer } from './components/CaseDetailDrawer'
 import { CreateCaseModal } from './components/CreateCaseModal'
@@ -13,26 +13,41 @@ import './App.css'
 
 type View = 'dashboard' | 'cases' | 'integrity'
 
+const unavailableAuthCapabilities: AuthCapabilities = {
+  demoLoginEnabled: false,
+  entraEnabled: false,
+  showDemoCredentials: false,
+}
+
 function App() {
   const [session, setSession] = useState<'checking' | 'guest' | 'authenticated'>('checking')
   const [user, setUser] = useState<User | null>(null)
+  const [authCapabilities, setAuthCapabilities] = useState<AuthCapabilities>(unavailableAuthCapabilities)
 
   useEffect(() => {
     let active = true
-    api.me()
-      .then((currentUser) => {
+    Promise.allSettled([api.me(), api.authCapabilities()])
+      .then(([sessionResult, capabilitiesResult]) => {
         if (!active) return
-        setUser(currentUser)
-        setSession('authenticated')
+        setAuthCapabilities(
+          capabilitiesResult.status === 'fulfilled'
+            ? capabilitiesResult.value
+            : unavailableAuthCapabilities,
+        )
+        if (sessionResult.status === 'fulfilled') {
+          setUser(sessionResult.value)
+          setSession('authenticated')
+        } else {
+          setSession('guest')
+        }
       })
-      .catch(() => { if (active) setSession('guest') })
     return () => { active = false }
   }, [])
 
   if (session === 'checking') return <LaunchScreen />
 
   if (session === 'guest' || !user) {
-    return <LoginPage onAuthenticated={(authenticatedUser) => { setUser(authenticatedUser); setSession('authenticated') }} />
+    return <LoginPage capabilities={authCapabilities} onAuthenticated={(authenticatedUser) => { setUser(authenticatedUser); setSession('authenticated') }} />
   }
 
   return (

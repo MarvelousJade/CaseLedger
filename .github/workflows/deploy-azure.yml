@@ -52,6 +52,13 @@ jobs:
     env:
       AZURE_POSTGRES_ADMIN_PASSWORD: ${{ secrets.AZURE_POSTGRES_ADMIN_PASSWORD }}
       CASELEDGER_SEED_ADMIN_PASSWORD: ${{ secrets.CASELEDGER_SEED_ADMIN_PASSWORD }}
+      CASELEDGER_SEED_ANALYST_PASSWORD: ${{ secrets.CASELEDGER_SEED_ANALYST_PASSWORD }}
+      CASELEDGER_ENTRA_CLIENT_SECRET: ${{ secrets.CASELEDGER_ENTRA_CLIENT_SECRET }}
+      CASELEDGER_AUTHENTICATION_MODE: ${{ vars.CASELEDGER_AUTHENTICATION_MODE }}
+      CASELEDGER_ENTRA_TENANT_ID: ${{ vars.CASELEDGER_ENTRA_TENANT_ID }}
+      CASELEDGER_ENTRA_CLIENT_ID: ${{ vars.CASELEDGER_ENTRA_CLIENT_ID }}
+      CASELEDGER_ENTRA_AUTO_PROVISION_ANALYST: ${{ vars.CASELEDGER_ENTRA_AUTO_PROVISION_ANALYST }}
+      CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID: ${{ vars.CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID }}
       RESOURCE_GROUP: ${{ inputs.resource_group }}
       LOCATION: ${{ inputs.location }}
       DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment_name }}
@@ -82,10 +89,49 @@ jobs:
             echo 'image_sha must be a lowercase 40-character commit SHA.' >&2
             exit 1
           fi
-          if [[ -z "$AZURE_POSTGRES_ADMIN_PASSWORD" || -z "$CASELEDGER_SEED_ADMIN_PASSWORD" ]]; then
-            echo 'The protected Azure environment is missing required password secrets.' >&2
+          if [[ -z "$AZURE_POSTGRES_ADMIN_PASSWORD" ]]; then
+            echo 'The protected Azure environment is missing the PostgreSQL password secret.' >&2
             exit 1
           fi
+          authentication_mode="${CASELEDGER_AUTHENTICATION_MODE:-}"
+          if [[ "$authentication_mode" != 'Entra' && "$authentication_mode" != 'Demo' && "$authentication_mode" != 'DemoAndEntra' ]]; then
+            echo 'CASELEDGER_AUTHENTICATION_MODE must explicitly be Entra, Demo, or DemoAndEntra.' >&2
+            exit 1
+          fi
+          demo_enabled='false'
+          entra_enabled='false'
+          if [[ "$authentication_mode" == 'Demo' || "$authentication_mode" == 'DemoAndEntra' ]]; then
+            demo_enabled='true'
+          fi
+          if [[ "$authentication_mode" == 'Entra' || "$authentication_mode" == 'DemoAndEntra' ]]; then
+            entra_enabled='true'
+          fi
+          if [[ "$demo_enabled" == 'true' && ( ${#CASELEDGER_SEED_ADMIN_PASSWORD} -lt 12 || ${#CASELEDGER_SEED_ANALYST_PASSWORD} -lt 12 ) ]]; then
+            echo 'Demo authentication requires two protected seed passwords of at least 12 characters.' >&2
+            exit 1
+          fi
+          entra_auto_provision="${CASELEDGER_ENTRA_AUTO_PROVISION_ANALYST:-false}"
+          if [[ "$entra_auto_provision" != 'true' && "$entra_auto_provision" != 'false' ]]; then
+            echo 'CASELEDGER_ENTRA_AUTO_PROVISION_ANALYST must be true or false.' >&2
+            exit 1
+          fi
+          if [[ "$entra_enabled" != 'true' && "$entra_auto_provision" == 'true' ]]; then
+            echo 'Analyst auto-provisioning cannot be enabled while Entra authentication is disabled.' >&2
+            exit 1
+          fi
+          if [[ "$entra_enabled" == 'true' ]]; then
+            guid_pattern='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+            if [[ ! "$CASELEDGER_ENTRA_TENANT_ID" =~ $guid_pattern || ! "$CASELEDGER_ENTRA_CLIENT_ID" =~ $guid_pattern || ${#CASELEDGER_ENTRA_CLIENT_SECRET} -lt 16 ]]; then
+              echo 'Enabled Entra authentication requires tenant/client GUID variables and a protected client-secret value.' >&2
+              exit 1
+            fi
+            if [[ "$entra_auto_provision" != 'true' && ! "$CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID" =~ $guid_pattern ]]; then
+              echo 'Entra authentication requires an immutable bootstrap administrator object ID unless tenant-wide Analyst auto-provisioning is explicitly enabled.' >&2
+              exit 1
+            fi
+          fi
+          echo "AUTHENTICATION_MODE=$authentication_mode" >> "$GITHUB_ENV"
+          echo "ENTRA_AUTO_PROVISION_ANALYST=$entra_auto_provision" >> "$GITHUB_ENV"
           echo "IMAGE_SHA=$image_sha" >> "$GITHUB_ENV"
           echo "API_IMAGE=ghcr.io/marvelousjade/caseledger:$image_sha" >> "$GITHUB_ENV"
           echo "WORKER_IMAGE=ghcr.io/marvelousjade/caseledger-audit-worker:$image_sha" >> "$GITHUB_ENV"
@@ -123,7 +169,14 @@ jobs:
               apiImage="$API_IMAGE" \
               workerImage="$WORKER_IMAGE" \
               postgresAdministratorPassword="$AZURE_POSTGRES_ADMIN_PASSWORD" \
+              authenticationMode="$AUTHENTICATION_MODE" \
               seedAdministratorPassword="$CASELEDGER_SEED_ADMIN_PASSWORD" \
+              seedAnalystPassword="$CASELEDGER_SEED_ANALYST_PASSWORD" \
+              entraTenantId="$CASELEDGER_ENTRA_TENANT_ID" \
+              entraClientId="$CASELEDGER_ENTRA_CLIENT_ID" \
+              entraClientSecret="$CASELEDGER_ENTRA_CLIENT_SECRET" \
+              entraAutoProvisionAnalyst="$ENTRA_AUTO_PROVISION_ANALYST" \
+              entraBootstrapAdministratorObjectId="$CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID" \
             --only-show-errors
 
       - name: Deploy infrastructure
@@ -140,7 +193,14 @@ jobs:
               apiImage="$API_IMAGE" \
               workerImage="$WORKER_IMAGE" \
               postgresAdministratorPassword="$AZURE_POSTGRES_ADMIN_PASSWORD" \
+              authenticationMode="$AUTHENTICATION_MODE" \
               seedAdministratorPassword="$CASELEDGER_SEED_ADMIN_PASSWORD" \
+              seedAnalystPassword="$CASELEDGER_SEED_ANALYST_PASSWORD" \
+              entraTenantId="$CASELEDGER_ENTRA_TENANT_ID" \
+              entraClientId="$CASELEDGER_ENTRA_CLIENT_ID" \
+              entraClientSecret="$CASELEDGER_ENTRA_CLIENT_SECRET" \
+              entraAutoProvisionAnalyst="$ENTRA_AUTO_PROVISION_ANALYST" \
+              entraBootstrapAdministratorObjectId="$CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID" \
             --only-show-errors > deployment.json
 
       - name: Publish deployment URL
@@ -149,11 +209,12 @@ jobs:
         run: |
           set -euo pipefail
           api_url="$(jq -r '.properties.outputs.apiUrl.value' deployment.json)"
-          if [[ ! "$api_url" =~ ^https:// ]]; then
+          entra_redirect_uri="$(jq -r '.properties.outputs.entraRedirectUri.value' deployment.json)"
+          if [[ ! "$api_url" =~ ^https:// || ! "$entra_redirect_uri" =~ ^https://.+/signin-oidc$ ]]; then
             echo 'Deployment did not return a valid HTTPS API URL.' >&2
             exit 1
           fi
-          printf '### Azure deployment\n\n%s\n' "$api_url" >> "$GITHUB_STEP_SUMMARY"
+          printf '### Azure deployment\n\nApplication: %s\n\nEntra redirect URI: `%s`\n' "$api_url" "$entra_redirect_uri" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Remove deployment output
         if: always()

@@ -46,6 +46,8 @@ services:
       context: .
     environment:
       ASPNETCORE_ENVIRONMENT: Production
+      Authentication__DemoLoginEnabled: "true"
+      Authentication__ShowDemoCredentials: "true"
       Database__Provider: PostgreSQL
       ConnectionStrings__CaseLedger: Host=database;Port=5432;Database=caseledger;Username=caseledger;Password=caseledger-e2e
       Messaging__Enabled: "true"
@@ -57,6 +59,7 @@ services:
       Webhook__AllowInsecureHttp: "true"
       Security__RequireSecureCookies: "false"
       Seed__AdminPassword: E2eAdmin123!
+      Seed__AnalystPassword: Analyst123!
     depends_on:
       database:
         condition: service_healthy

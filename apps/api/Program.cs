@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using System.Security.Claims;
 using System.Threading.RateLimiting;
+using CaseLedger.Api.Authentication;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Endpoints;
 using CaseLedger.Api.EvidenceStorage;
@@ -87,6 +88,7 @@ builder.Services.AddDbContext<CaseLedgerDbContext>(options =>
 
 builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddScoped<AuditChainService>();
+builder.Services.AddScoped<SessionCookieEvents>();
 builder.Services.AddEvidenceStorage(builder.Configuration, builder.Environment);
 builder.Services.Configure<MessagingOptions>(
     builder.Configuration.GetSection(MessagingOptions.SectionName));
@@ -187,15 +189,9 @@ builder.Services
             : CookieSecurePolicy.SameAsRequest;
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
-        options.Events.OnRedirectToLogin = context => WriteAuthProblemAsync(
-            context.HttpContext,
-            StatusCodes.Status401Unauthorized,
-            "Authentication required");
-        options.Events.OnRedirectToAccessDenied = context => WriteAuthProblemAsync(
-            context.HttpContext,
-            StatusCodes.Status403Forbidden,
-            "Access denied");
+        options.EventsType = typeof(SessionCookieEvents);
     });
+builder.Services.AddCaseLedgerExternalAuthentication(builder.Configuration);
 builder.Services.AddAuthorization();
 
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ??
@@ -260,17 +256,5 @@ await using (var scope = app.Services.CreateAsyncScope())
 }
 
 await app.RunAsync();
-
-static Task WriteAuthProblemAsync(
-    HttpContext context,
-    int statusCode,
-    string title)
-{
-    return Results.Problem(
-        statusCode: statusCode,
-        title: title,
-        type: $"https://httpstatuses.com/{statusCode}")
-        .ExecuteAsync(context);
-}
 
 public partial class Program;

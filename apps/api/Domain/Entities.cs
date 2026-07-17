@@ -31,6 +31,21 @@ public sealed class User
     public string NormalizedEmail { get; set; } = string.Empty;
     public string Role { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
+    public bool IsActive { get; set; } = true;
+    public bool LocalLoginEnabled { get; set; } = true;
+    public ICollection<ExternalIdentity> ExternalIdentities { get; set; } =
+        new List<ExternalIdentity>();
+}
+
+public sealed class ExternalIdentity
+{
+    public Guid Id { get; set; }
+    public Guid UserId { get; set; }
+    public User User { get; set; } = null!;
+    public string Provider { get; set; } = string.Empty;
+    public Guid TenantId { get; set; }
+    public Guid ObjectId { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 public sealed class CaseRecord

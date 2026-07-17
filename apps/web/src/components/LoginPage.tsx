@@ -1,14 +1,28 @@
 import { useState, type FormEvent } from 'react'
 import { api, getErrorMessage } from '../api'
 import { BrandMark, Icon } from '../Icons'
-import type { User } from '../types'
+import type { AuthCapabilities, User } from '../types'
 
-export function LoginPage({ onAuthenticated }: { onAuthenticated: (user: User) => void }) {
-  const [email, setEmail] = useState('analyst@caseledger.dev')
-  const [password, setPassword] = useState('Analyst123!')
+interface LoginPageProps {
+  capabilities: AuthCapabilities
+  onAuthenticated: (user: User) => void
+}
+
+export function LoginPage({ capabilities, onAuthenticated }: LoginPageProps) {
+  const [email, setEmail] = useState(
+    capabilities.showDemoCredentials ? 'analyst@caseledger.dev' : '',
+  )
+  const [password, setPassword] = useState(
+    capabilities.showDemoCredentials ? 'Analyst123!' : '',
+  )
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState(() =>
+    new URLSearchParams(window.location.search).get('authError') ===
+    'external-sign-in-failed'
+      ? 'Microsoft sign-in could not be completed. Ask an administrator to confirm your access.'
+      : '',
+  )
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
@@ -72,33 +86,56 @@ export function LoginPage({ onAuthenticated }: { onAuthenticated: (user: User) =
 
           {error && <div className="alert alert--danger" role="alert"><Icon name="warning" size={18} /><span>{error}</span></div>}
 
-          <form onSubmit={submit} className="form-stack">
-            <label className="field">
-              <span>Email address</span>
-              <div className="input-wrap"><Icon name="user" size={18} /><input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></div>
-            </label>
-            <label className="field">
-              <span>Password</span>
-              <div className="input-wrap">
-                <Icon name="hash" size={18} />
-                <input type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
-                <button className="input-action" type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'Hide' : 'Show'}</button>
-              </div>
-            </label>
-            <button className="button button--primary button--large" disabled={submitting} type="submit">
-              {submitting ? <><span className="button-spinner" /> Signing in…</> : <>Sign in securely <Icon name="arrow-right" size={18} /></>}
-            </button>
-          </form>
+          {capabilities.entraEnabled && (
+            <a className="button button--secondary button--large button--full microsoft-sign-in" href="/api/auth/entra/login?returnUrl=/">
+              Continue with Microsoft <Icon name="arrow-right" size={18} />
+            </a>
+          )}
 
-          <div className="demo-access">
-            <div className="section-divider"><span>Demo access</span></div>
-            <div className="credential-grid credential-grid--single">
-              <button type="button" className="credential-card" onClick={fillCredentials}>
-                <span className="avatar avatar--green">AN</span><span><b>Analyst</b><small>analyst@caseledger.dev</small></span><Icon name="arrow-right" size={16} />
-              </button>
+          {capabilities.demoLoginEnabled && (
+            <>
+              {capabilities.entraEnabled && <div className="section-divider"><span>Or use local sign-in</span></div>}
+              <form onSubmit={submit} className="form-stack">
+                <label className="field">
+                  <span>Email address</span>
+                  <div className="input-wrap"><Icon name="user" size={18} /><input type="email" autoComplete="username" value={email} onChange={(event) => setEmail(event.target.value)} required /></div>
+                </label>
+                <label className="field">
+                  <span>Password</span>
+                  <div className="input-wrap">
+                    <Icon name="hash" size={18} />
+                    <input type={showPassword ? 'text' : 'password'} autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+                    <button className="input-action" type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? 'Hide password' : 'Show password'}>{showPassword ? 'Hide' : 'Show'}</button>
+                  </div>
+                </label>
+                <button className="button button--primary button--large" disabled={submitting} type="submit">
+                  {submitting ? <><span className="button-spinner" /> Signing in…</> : <>Sign in securely <Icon name="arrow-right" size={18} /></>}
+                </button>
+              </form>
+
+              {capabilities.showDemoCredentials && (
+                <div className="demo-access">
+                  <div className="section-divider"><span>Demo access</span></div>
+                  <div className="credential-grid credential-grid--single">
+                    <button type="button" className="credential-card" onClick={fillCredentials}>
+                      <span className="avatar avatar--green">AN</span><span><b>Analyst</b><small>analyst@caseledger.dev</small></span><Icon name="arrow-right" size={16} />
+                    </button>
+                  </div>
+                  <p className="credential-hint">Use the shared analyst account to explore the workspace.</p>
+                </div>
+              )}
+            </>
+          )}
+
+          {!capabilities.demoLoginEnabled && !capabilities.entraEnabled && (
+            <div className="auth-unavailable" role="status">
+              <span><Icon name="shield" size={20} /></span>
+              <div>
+                <b>Sign-in is not available</b>
+                <p>No authentication method is configured for this environment. Contact an administrator.</p>
+              </div>
             </div>
-            <p className="credential-hint">Use the shared analyst account to explore the workspace.</p>
-          </div>
+          )}
         </div>
         <p className="login-footer"><Icon name="shield" size={14} /> Protected by secure, HTTP-only session cookies</p>
       </section>

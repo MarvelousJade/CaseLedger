@@ -7,6 +7,7 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
     : DbContext(options)
 {
     public DbSet<User> Users => Set<User>();
+    public DbSet<ExternalIdentity> ExternalIdentities => Set<ExternalIdentity>();
     public DbSet<CaseRecord> Cases => Set<CaseRecord>();
     public DbSet<Evidence> Evidence => Set<Evidence>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
@@ -24,7 +25,21 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
         user.Property(item => item.NormalizedEmail).HasMaxLength(200).IsRequired();
         user.Property(item => item.Role).HasMaxLength(40).IsRequired();
         user.Property(item => item.PasswordHash).HasMaxLength(300).IsRequired();
+        user.Property(item => item.IsActive).HasDefaultValue(true);
+        user.Property(item => item.LocalLoginEnabled).HasDefaultValue(true);
         user.HasIndex(item => item.NormalizedEmail).IsUnique();
+
+        var externalIdentity = modelBuilder.Entity<ExternalIdentity>();
+        externalIdentity.ToTable("ExternalIdentities");
+        externalIdentity.HasKey(item => item.Id);
+        externalIdentity.Property(item => item.Provider).HasMaxLength(32).IsRequired();
+        externalIdentity.HasIndex(
+                item => new { item.Provider, item.TenantId, item.ObjectId })
+            .IsUnique();
+        externalIdentity.HasOne(item => item.User)
+            .WithMany(item => item.ExternalIdentities)
+            .HasForeignKey(item => item.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
 
         var caseRecord = modelBuilder.Entity<CaseRecord>();
         caseRecord.ToTable("Cases");

@@ -27,9 +27,26 @@ try {
         exit 0
     }
 
-    if ([string]::IsNullOrWhiteSpace($env:CASELEDGER_POSTGRES_ADMIN_PASSWORD) -or
-        [string]::IsNullOrWhiteSpace($env:CASELEDGER_SEED_ADMIN_PASSWORD)) {
-        throw 'Set CASELEDGER_POSTGRES_ADMIN_PASSWORD and CASELEDGER_SEED_ADMIN_PASSWORD in this PowerShell session before cloud validation.'
+    if ([string]::IsNullOrWhiteSpace($env:CASELEDGER_POSTGRES_ADMIN_PASSWORD)) {
+        throw 'Set CASELEDGER_POSTGRES_ADMIN_PASSWORD in this PowerShell session before cloud validation.'
+    }
+
+    $authenticationMode = $env:CASELEDGER_AUTHENTICATION_MODE
+    if ($authenticationMode -notin @('Entra', 'Demo', 'DemoAndEntra')) {
+        throw 'Set CASELEDGER_AUTHENTICATION_MODE to Entra, Demo, or DemoAndEntra.'
+    }
+
+    if ($authenticationMode -in @('Demo', 'DemoAndEntra') -and
+        ([string]::IsNullOrWhiteSpace($env:CASELEDGER_SEED_ADMIN_PASSWORD) -or
+         [string]::IsNullOrWhiteSpace($env:CASELEDGER_SEED_ANALYST_PASSWORD))) {
+        throw 'Demo authentication requires CASELEDGER_SEED_ADMIN_PASSWORD and CASELEDGER_SEED_ANALYST_PASSWORD.'
+    }
+
+    if ($authenticationMode -in @('Entra', 'DemoAndEntra') -and
+        ([string]::IsNullOrWhiteSpace($env:CASELEDGER_ENTRA_TENANT_ID) -or
+         [string]::IsNullOrWhiteSpace($env:CASELEDGER_ENTRA_CLIENT_ID) -or
+         [string]::IsNullOrWhiteSpace($env:CASELEDGER_ENTRA_CLIENT_SECRET))) {
+        throw 'Entra authentication requires CASELEDGER_ENTRA_TENANT_ID, CASELEDGER_ENTRA_CLIENT_ID, and CASELEDGER_ENTRA_CLIENT_SECRET.'
     }
 
     & az deployment group validate `

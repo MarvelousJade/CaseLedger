@@ -4,6 +4,11 @@ namespace CaseLedger.Api.Contracts;
 
 public sealed record LoginRequest(string? Email, string? Password);
 
+public sealed record AuthCapabilitiesResponse(
+    bool DemoLoginEnabled,
+    bool EntraEnabled,
+    bool ShowDemoCredentials);
+
 public sealed record UserResponse(
     Guid Id,
     string Name,

@@ -9,6 +9,12 @@ export interface User {
   role: string
 }
 
+export interface AuthCapabilities {
+  demoLoginEnabled: boolean
+  entraEnabled: boolean
+  showDemoCredentials: boolean
+}
+
 export interface Evidence {
   id: string
   fileName: string

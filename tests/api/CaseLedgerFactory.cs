@@ -14,6 +14,8 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
 {
     private readonly bool messagingEnabled;
     private readonly string messagingProvider;
+    private readonly bool demoLoginEnabled;
+    private readonly IReadOnlyDictionary<string, string?> configurationOverrides;
     private readonly string databasePath = Path.Combine(
         Path.GetTempPath(),
         $"caseledger-tests-{Guid.NewGuid():N}.db");
@@ -25,10 +27,15 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
 
     public CaseLedgerFactory(
         bool messagingEnabled = false,
-        string messagingProvider = "RabbitMq")
+        string messagingProvider = "RabbitMq",
+        bool demoLoginEnabled = true,
+        IReadOnlyDictionary<string, string?>? configurationOverrides = null)
     {
         this.messagingEnabled = messagingEnabled;
         this.messagingProvider = messagingProvider;
+        this.demoLoginEnabled = demoLoginEnabled;
+        this.configurationOverrides = configurationOverrides ??
+            new Dictionary<string, string?>();
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -36,15 +43,25 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
         builder.UseEnvironment("Testing");
         builder.ConfigureAppConfiguration((_, configuration) =>
         {
-            configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            var values = new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite",
                 ["ConnectionStrings:CaseLedger"] = $"Data Source={databasePath}",
                 ["EvidenceStorage:Provider"] = "Local",
                 ["EvidenceStorage:Local:RootPath"] = evidenceStoragePath,
+                ["Authentication:DemoLoginEnabled"] =
+                    demoLoginEnabled.ToString(),
+                ["Authentication:ShowDemoCredentials"] =
+                    demoLoginEnabled.ToString(),
                 ["Messaging:Enabled"] = messagingEnabled.ToString(),
                 ["Messaging:Provider"] = messagingProvider
-            });
+            };
+            foreach (var (key, value) in configurationOverrides)
+            {
+                values[key] = value;
+            }
+
+            configuration.AddInMemoryCollection(values);
         });
         builder.ConfigureServices(services =>
         {

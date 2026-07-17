@@ -1,5 +1,6 @@
 import type {
   Activity,
+  AuthCapabilities,
   AuditVerificationJob,
   CaseCollection,
   CaseItem,
@@ -227,6 +228,16 @@ function unwrapCollection(value: unknown): CaseCollection {
 }
 
 export const api = {
+  async authCapabilities(): Promise<AuthCapabilities> {
+    const payload = asRecord(await request<unknown>('/api/auth/capabilities'))
+    const record = asRecord(payload.capabilities ?? payload.data ?? payload)
+    return {
+      demoLoginEnabled: readBoolean(record, ['demoLoginEnabled']),
+      entraEnabled: readBoolean(record, ['entraEnabled']),
+      showDemoCredentials: readBoolean(record, ['showDemoCredentials']),
+    }
+  },
+
   async login(email: string, password: string) {
     const payload = await request<unknown>('/api/auth/login', {
       method: 'POST',

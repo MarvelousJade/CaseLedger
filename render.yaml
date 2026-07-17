@@ -13,12 +13,18 @@ services:
         value: "8080"
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
+      - key: Authentication__DemoLoginEnabled
+        value: "true"
+      - key: Authentication__ShowDemoCredentials
+        value: "true"
       - key: Database__Provider
         value: PostgreSQL
       - key: ConnectionStrings__CaseLedger
         sync: false
       - key: Seed__AdminPassword
         generateValue: true
+      - key: Seed__AnalystPassword
+        sync: false
       - key: Messaging__Enabled
         value: "false"
       - key: Webhook__Enabled

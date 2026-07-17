@@ -1,9 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using CaseLedger.Api.Authentication;
 using CaseLedger.Api.Domain;
 using CaseLedger.Api.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace CaseLedger.Api.Data;
 
@@ -12,27 +14,21 @@ public sealed class DatabaseSeeder(
     PasswordService passwords,
     AuditChainService auditChain,
     IConfiguration configuration,
-    IHostEnvironment environment)
+    IHostEnvironment environment,
+    IOptions<CaseLedgerAuthenticationOptions> authenticationOptions,
+    TimeProvider clock)
 {
     public static readonly Guid AdminId = Guid.Parse("10000000-0000-0000-0000-000000000001");
     public static readonly Guid AnalystId = Guid.Parse("10000000-0000-0000-0000-000000000002");
 
     public async Task SeedAsync(CancellationToken cancellationToken = default)
     {
+        var demoLoginEnabled = authenticationOptions.Value.DemoLoginEnabled;
+        var adminPassword = GetAdminPassword(demoLoginEnabled);
+        var analystPassword = GetAnalystPassword(demoLoginEnabled);
+
         if (!await db.Users.AnyAsync(cancellationToken))
         {
-            var adminPassword = configuration["Seed:AdminPassword"];
-            if (string.IsNullOrWhiteSpace(adminPassword))
-            {
-                if (environment.IsProduction())
-                {
-                    throw new InvalidOperationException(
-                        "Seed:AdminPassword is required in Production.");
-                }
-
-                adminPassword = "Admin123!";
-            }
-
             db.Users.AddRange(
                 new User
                 {
@@ -41,7 +37,9 @@ public sealed class DatabaseSeeder(
                     Email = "admin@caseledger.dev",
                     NormalizedEmail = "ADMIN@CASELEDGER.DEV",
                     Role = "Admin",
-                    PasswordHash = passwords.HashPassword(adminPassword, "caseledger-admin")
+                    PasswordHash = passwords.HashPassword(
+                        adminPassword ?? GenerateDisabledAccountPassword()),
+                    LocalLoginEnabled = demoLoginEnabled
                 },
                 new User
                 {
@@ -50,11 +48,22 @@ public sealed class DatabaseSeeder(
                     Email = "analyst@caseledger.dev",
                     NormalizedEmail = "ANALYST@CASELEDGER.DEV",
                     Role = "Analyst",
-                    PasswordHash = passwords.HashPassword("Analyst123!", "caseledger-analyst")
+                    PasswordHash = passwords.HashPassword(
+                        analystPassword ?? GenerateDisabledAccountPassword()),
+                    LocalLoginEnabled = demoLoginEnabled
                 });
 
             await db.SaveChangesAsync(cancellationToken);
         }
+
+        await ReconcileDemoLoginPolicyAsync(
+            demoLoginEnabled,
+            adminPassword,
+            analystPassword,
+            cancellationToken);
+        await EnsureEntraBootstrapAdministratorAsync(
+            authenticationOptions.Value.Entra,
+            cancellationToken);
 
         if (await db.Cases.AnyAsync(cancellationToken))
         {
@@ -189,6 +198,171 @@ public sealed class DatabaseSeeder(
             cancellationToken);
 
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private string? GetAdminPassword(bool demoLoginEnabled)
+    {
+        if (!demoLoginEnabled)
+        {
+            return null;
+        }
+
+        var adminPassword = configuration["Seed:AdminPassword"];
+        if (!string.IsNullOrWhiteSpace(adminPassword))
+        {
+            return adminPassword;
+        }
+
+        if (environment.IsProduction())
+        {
+            throw new InvalidOperationException(
+                "Seed:AdminPassword is required when demo login is enabled in Production.");
+        }
+
+        return "Admin123!";
+    }
+
+    private string? GetAnalystPassword(bool demoLoginEnabled)
+    {
+        if (!demoLoginEnabled)
+        {
+            return null;
+        }
+
+        var analystPassword = configuration["Seed:AnalystPassword"];
+        if (!string.IsNullOrWhiteSpace(analystPassword))
+        {
+            return analystPassword;
+        }
+
+        if (environment.IsProduction())
+        {
+            throw new InvalidOperationException(
+                "Seed:AnalystPassword is required when demo login is enabled in Production.");
+        }
+
+        return "Analyst123!";
+    }
+
+    private async Task ReconcileDemoLoginPolicyAsync(
+        bool demoLoginEnabled,
+        string? adminPassword,
+        string? analystPassword,
+        CancellationToken cancellationToken)
+    {
+        var demoUsers = await db.Users
+            .Where(item => item.Id == AdminId || item.Id == AnalystId)
+            .ToListAsync(cancellationToken);
+
+        foreach (var user in demoUsers)
+        {
+            if (demoLoginEnabled)
+            {
+                var password = user.Id == AdminId
+                    ? adminPassword!
+                    : analystPassword!;
+                if (!user.LocalLoginEnabled ||
+                    !passwords.VerifyPassword(password, user.PasswordHash) ||
+                    UsesLegacyDeterministicSalt(user))
+                {
+                    user.LocalLoginEnabled = true;
+                    user.PasswordHash = passwords.HashPassword(password);
+                }
+            }
+            else if (user.LocalLoginEnabled)
+            {
+                user.LocalLoginEnabled = false;
+                user.PasswordHash = passwords.HashPassword(
+                    GenerateDisabledAccountPassword());
+            }
+        }
+
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static bool UsesLegacyDeterministicSalt(User user)
+    {
+        var legacySeed = user.Id == AdminId
+            ? "caseledger-admin"
+            : "caseledger-analyst";
+        var parts = user.PasswordHash.Split('$');
+        if (parts.Length != 4)
+        {
+            return false;
+        }
+
+        try
+        {
+            var actualSalt = Convert.FromBase64String(parts[2]);
+            var legacySalt = SHA256.HashData(
+                Encoding.UTF8.GetBytes(legacySeed))[..16];
+            return CryptographicOperations.FixedTimeEquals(
+                actualSalt,
+                legacySalt);
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
+
+    private async Task EnsureEntraBootstrapAdministratorAsync(
+        EntraAuthenticationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.Enabled ||
+            !Guid.TryParse(options.TenantId, out var tenantId) ||
+            !Guid.TryParse(
+                options.BootstrapAdministratorObjectId,
+                out var objectId))
+        {
+            return;
+        }
+
+        var administratorMappings = await db.ExternalIdentities
+            .Where(
+                item =>
+                    item.Provider == ExternalIdentityService.MicrosoftEntraProvider &&
+                    item.UserId == AdminId)
+            .ToListAsync(cancellationToken);
+        if (administratorMappings.Count > 0)
+        {
+            if (administratorMappings.Count == 1 &&
+                administratorMappings[0].TenantId == tenantId &&
+                administratorMappings[0].ObjectId == objectId)
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                "The configured Entra bootstrap administrator does not match " +
+                "the immutable administrator identity mapping in the database.");
+        }
+
+        db.ExternalIdentities.Add(new ExternalIdentity
+        {
+            Id = Guid.NewGuid(),
+            UserId = AdminId,
+            Provider = ExternalIdentityService.MicrosoftEntraProvider,
+            TenantId = tenantId,
+            ObjectId = objectId,
+            CreatedAt = NormalizeUtcToMicroseconds(
+                clock.GetUtcNow().UtcDateTime)
+        });
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static string GenerateDisabledAccountPassword() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
+
+    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
+    {
+        var utc = value.Kind == DateTimeKind.Utc
+            ? value
+            : value.ToUniversalTime();
+        return new DateTime(
+            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
+            DateTimeKind.Utc);
     }
 
     private static CaseRecord NewCase(

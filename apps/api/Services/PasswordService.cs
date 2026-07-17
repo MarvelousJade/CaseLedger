@@ -1,5 +1,4 @@
 using System.Security.Cryptography;
-using System.Text;
 
 namespace CaseLedger.Api.Services;
 
@@ -10,20 +9,11 @@ public sealed class PasswordService
     private const int HashLength = 32;
     private const string Algorithm = "pbkdf2-sha256";
 
-    public string HashPassword(string password, string? deterministicSaltSeed = null)
+    public string HashPassword(string password)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(password);
 
-        byte[] salt;
-        if (deterministicSaltSeed is null)
-        {
-            salt = RandomNumberGenerator.GetBytes(SaltLength);
-        }
-        else
-        {
-            salt = SHA256.HashData(Encoding.UTF8.GetBytes(deterministicSaltSeed))[..SaltLength];
-        }
-
+        var salt = RandomNumberGenerator.GetBytes(SaltLength);
         var hash = Rfc2898DeriveBytes.Pbkdf2(
             password,
             salt,

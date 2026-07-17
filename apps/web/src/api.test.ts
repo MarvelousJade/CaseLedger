@@ -35,6 +35,26 @@ afterEach(() => {
 })
 
 describe('case API contract', () => {
+  it('reads the public authentication capabilities', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      demoLoginEnabled: false,
+      entraEnabled: true,
+      showDemoCredentials: false,
+    }))
+
+    const capabilities = await api.authCapabilities()
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/capabilities',
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    expect(capabilities).toEqual({
+      demoLoginEnabled: false,
+      entraEnabled: true,
+      showDemoCredentials: false,
+    })
+  })
+
   it('sends page parameters and preserves pagination metadata', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
       items: [casePayload()],

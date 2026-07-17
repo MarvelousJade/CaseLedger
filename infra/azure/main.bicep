@@ -35,9 +35,40 @@ param postgresAdministratorPassword string
 
 @description('Password for the seeded CaseLedger administrator. Supply this through a secure deployment input.')
 @secure()
-@minLength(12)
 @maxLength(256)
-param seedAdministratorPassword string
+param seedAdministratorPassword string = ''
+
+@description('Password for the seeded CaseLedger analyst when demo login is enabled. Supply this through a secure deployment input.')
+@secure()
+@maxLength(256)
+param seedAnalystPassword string = ''
+
+@description('Required interactive authentication mode. Entra is the production default; Demo must be an explicit choice.')
+@allowed([
+  'Entra'
+  'Demo'
+  'DemoAndEntra'
+])
+param authenticationMode string
+
+@description('Display the public CaseLedger demo credentials. Valid only for a deliberate Demo or DemoAndEntra deployment.')
+param showDemoCredentials bool = false
+
+@description('Microsoft Entra tenant ID used to validate issuer and tenant claims.')
+param entraTenantId string = ''
+
+@description('Microsoft Entra application (client) ID.')
+param entraClientId string = ''
+
+@description('Microsoft Entra application client secret. It is stored in Key Vault and exposed to the API only through a secret reference.')
+@secure()
+param entraClientSecret string = ''
+
+@description('Allow an authenticated Entra identity without an existing mapping to become a local Analyst. Keep disabled unless this is intentional.')
+param entraAutoProvisionAnalyst bool = false
+
+@description('Immutable Entra object ID mapped once to the seeded CaseLedger administrator. Prefer this over tenant-wide auto-provisioning.')
+param entraBootstrapAdministratorObjectId string = ''
 
 @description('PostgreSQL database name.')
 @minLength(1)
@@ -135,6 +166,8 @@ var tags = union({
   environment: environmentName
   managedBy: 'Bicep'
 }, additionalTags)
+var demoLoginEnabled = authenticationMode == 'Demo' || authenticationMode == 'DemoAndEntra'
+var entraAuthenticationEnabled = authenticationMode == 'Entra' || authenticationMode == 'DemoAndEntra'
 var storageAccountName = take('st${compactBaseName}', 24)
 var keyVaultName = take('kv-${baseName}', 24)
 var postgresServerName = '${baseName}-pg'
@@ -524,9 +557,29 @@ resource apiPostgresKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-0
   }
 }
 
-resource apiSeedAdministratorKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource apiSeedAdministratorKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (demoLoginEnabled) {
   name: guid(seedAdministratorSecret.id, apiIdentity.id, keyVaultSecretsUserRoleId)
   scope: seedAdministratorSecret
+  properties: {
+    principalId: apiIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRoleId
+  }
+}
+
+resource apiSeedAnalystKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (demoLoginEnabled) {
+  name: guid(seedAnalystSecret.id, apiIdentity.id, keyVaultSecretsUserRoleId)
+  scope: seedAnalystSecret
+  properties: {
+    principalId: apiIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: keyVaultSecretsUserRoleId
+  }
+}
+
+resource apiEntraClientSecretKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (entraAuthenticationEnabled) {
+  name: guid(entraClientSecretResource.id, apiIdentity.id, keyVaultSecretsUserRoleId)
+  scope: entraClientSecretResource
   properties: {
     principalId: apiIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -635,7 +688,7 @@ resource workerPostgresSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   }
 }
 
-resource seedAdministratorSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+resource seedAdministratorSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (demoLoginEnabled) {
   parent: keyVault
   name: 'seed-administrator-password'
   properties: {
@@ -644,9 +697,29 @@ resource seedAdministratorSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' 
   }
 }
 
+resource seedAnalystSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (demoLoginEnabled) {
+  parent: keyVault
+  name: 'seed-analyst-password'
+  properties: {
+    contentType: 'text/plain'
+    value: seedAnalystPassword
+  }
+}
+
+resource entraClientSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (entraAuthenticationEnabled) {
+  parent: keyVault
+  name: 'entra-client-secret'
+  properties: {
+    contentType: 'text/plain'
+    value: entraClientSecret
+  }
+}
+
 var apiPostgresSecretUrl = '${keyVault.properties.vaultUri}secrets/${apiPostgresSecret.name}'
 var workerPostgresSecretUrl = '${keyVault.properties.vaultUri}secrets/${workerPostgresSecret.name}'
-var seedAdministratorSecretUrl = '${keyVault.properties.vaultUri}secrets/${seedAdministratorSecret.name}'
+var seedAdministratorSecretUrl = '${keyVault.properties.vaultUri}secrets/seed-administrator-password'
+var seedAnalystSecretUrl = '${keyVault.properties.vaultUri}secrets/seed-analyst-password'
+var entraClientSecretUrl = '${keyVault.properties.vaultUri}secrets/entra-client-secret'
 var serviceBusFullyQualifiedNamespace = '${serviceBusNamespace.name}.servicebus.windows.net'
 var dataProtectionKeyBlobUri = '${storageAccount.properties.primaryEndpoints.blob}${dataProtectionContainer.name}/keys.xml'
 var dataProtectionKeyIdentifier = '${keyVault.properties.vaultUri}keys/${dataProtectionKey.name}'
@@ -682,25 +755,41 @@ resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
         transport: 'auto'
       }
       maxInactiveRevisions: 2
-      secrets: [
-        {
-          identity: apiIdentity.id
-          keyVaultUrl: apiPostgresSecretUrl
-          name: 'postgres-connection'
-        }
-        {
-          identity: apiIdentity.id
-          keyVaultUrl: seedAdministratorSecretUrl
-          name: 'seed-admin-password'
-        }
-      ]
+      secrets: concat([
+          {
+            identity: apiIdentity.id
+            keyVaultUrl: apiPostgresSecretUrl
+            name: 'postgres-connection'
+          }
+        ], demoLoginEnabled
+        ? [
+            {
+              identity: apiIdentity.id
+              keyVaultUrl: seedAdministratorSecretUrl
+              name: 'seed-admin-password'
+            }
+            {
+              identity: apiIdentity.id
+              keyVaultUrl: seedAnalystSecretUrl
+              name: 'seed-analyst-password'
+            }
+          ]
+        : [], entraAuthenticationEnabled
+        ? [
+            {
+              identity: apiIdentity.id
+              keyVaultUrl: entraClientSecretUrl
+              name: 'entra-client-secret'
+            }
+          ]
+        : [])
     }
     template: {
       containers: [
         {
           name: 'api'
           image: apiImage
-          env: [
+          env: concat([
             {
               name: 'ASPNETCORE_ENVIRONMENT'
               value: 'Production'
@@ -708,6 +797,38 @@ resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
             {
               name: 'ASPNETCORE_HTTP_PORTS'
               value: '8080'
+            }
+            {
+              name: 'ASPNETCORE_FORWARDEDHEADERS_ENABLED'
+              value: 'true'
+            }
+            {
+              name: 'Authentication__DemoLoginEnabled'
+              value: string(demoLoginEnabled)
+            }
+            {
+              name: 'Authentication__ShowDemoCredentials'
+              value: string(showDemoCredentials)
+            }
+            {
+              name: 'Authentication__Entra__Enabled'
+              value: string(entraAuthenticationEnabled)
+            }
+            {
+              name: 'Authentication__Entra__TenantId'
+              value: entraTenantId
+            }
+            {
+              name: 'Authentication__Entra__ClientId'
+              value: entraClientId
+            }
+            {
+              name: 'Authentication__Entra__AutoProvisionAnalyst'
+              value: string(entraAutoProvisionAnalyst)
+            }
+            {
+              name: 'Authentication__Entra__BootstrapAdministratorObjectId'
+              value: entraBootstrapAdministratorObjectId
             }
             {
               name: 'Database__Provider'
@@ -770,10 +891,6 @@ resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
               value: 'true'
             }
             {
-              name: 'Seed__AdminPassword'
-              secretRef: 'seed-admin-password'
-            }
-            {
               name: 'DataProtection__Azure__Enabled'
               value: 'true'
             }
@@ -793,7 +910,25 @@ resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
               name: 'OTEL_SERVICE_NAME'
               value: 'caseledger-api'
             }
-          ]
+          ], demoLoginEnabled
+          ? [
+              {
+                name: 'Seed__AdminPassword'
+                secretRef: 'seed-admin-password'
+              }
+              {
+                name: 'Seed__AnalystPassword'
+                secretRef: 'seed-analyst-password'
+              }
+            ]
+          : [], entraAuthenticationEnabled
+          ? [
+              {
+                name: 'Authentication__Entra__ClientSecret'
+                secretRef: 'entra-client-secret'
+              }
+            ]
+          : [])
           probes: [
             {
               type: 'Startup'
@@ -860,6 +995,8 @@ resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
   dependsOn: [
     apiPostgresKeyVaultRole
     apiSeedAdministratorKeyVaultRole
+    apiSeedAnalystKeyVaultRole
+    apiEntraClientSecretKeyVaultRole
     apiStorageRole
     apiDataProtectionStorageRole
     apiDataProtectionCryptoRole
@@ -1017,6 +1154,7 @@ resource workerContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
 }
 
 output apiUrl string = 'https://${apiContainerApp.properties.configuration.ingress.fqdn}'
+output entraRedirectUri string = 'https://${apiContainerApp.properties.configuration.ingress.fqdn}/signin-oidc'
 output apiContainerAppName string = apiContainerApp.name
 output workerContainerAppName string = workerContainerApp.name
 output containerAppsEnvironmentName string = containerAppsEnvironment.name

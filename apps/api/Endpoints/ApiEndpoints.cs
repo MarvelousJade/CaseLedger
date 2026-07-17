@@ -1,12 +1,13 @@
 using System.Security.Claims;
+using CaseLedger.Api.Authentication;
 using CaseLedger.Api.Contracts;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Domain;
 using CaseLedger.Api.Services;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace CaseLedger.Api.Endpoints;
 
@@ -18,6 +19,11 @@ public static class ApiEndpoints
         var auth = api.MapGroup("/auth")
             .WithTags("Authentication");
 
+        auth.MapGet("/capabilities", GetAuthCapabilities)
+            .AllowAnonymous()
+            .WithName("GetAuthCapabilities")
+            .WithSummary("Read the enabled interactive sign-in methods")
+            .Produces<AuthCapabilitiesResponse>(StatusCodes.Status200OK);
         auth.MapPost("/login", LoginAsync)
             .AllowAnonymous()
             .RequireRateLimiting("login")
@@ -26,6 +32,15 @@ public static class ApiEndpoints
             .Produces<UserResponse>()
             .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
             .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        auth.MapGet("/entra/login", BeginEntraLogin)
+            .AllowAnonymous()
+            .RequireRateLimiting("login")
+            .WithName("BeginEntraLogin")
+            .WithSummary("Begin an optional Microsoft Entra sign-in")
+            .Produces(StatusCodes.Status302Found)
+            .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
+            .Produces(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status429TooManyRequests);
         auth.MapGet("/me", MeAsync)
             .RequireAuthorization()
@@ -65,8 +80,39 @@ public static class ApiEndpoints
     {
         var idValue = principal.FindFirstValue(ClaimTypes.NameIdentifier);
         return Guid.TryParse(idValue, out var id)
-            ? await db.Users.SingleOrDefaultAsync(item => item.Id == id, cancellationToken)
+            ? await db.Users.SingleOrDefaultAsync(
+                item => item.Id == id && item.IsActive,
+                cancellationToken)
             : null;
+    }
+
+    private static IResult GetAuthCapabilities(
+        IOptions<CaseLedgerAuthenticationOptions> options) =>
+        Results.Ok(new AuthCapabilitiesResponse(
+            options.Value.DemoLoginEnabled,
+            options.Value.Entra.Enabled,
+            options.Value.ShowDemoCredentials));
+
+    private static IResult BeginEntraLogin(
+        [FromQuery] string? returnUrl,
+        IOptions<CaseLedgerAuthenticationOptions> options)
+    {
+        if (!options.Value.Entra.Enabled)
+        {
+            return Results.NotFound();
+        }
+
+        if (!TryGetLocalReturnUrl(returnUrl, out var redirectUri))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["returnUrl"] = ["returnUrl must be a local application path."]
+            });
+        }
+
+        return Results.Challenge(
+            new AuthenticationProperties { RedirectUri = redirectUri },
+            [AuthenticationSchemes.Entra]);
     }
 
     private static async Task<IResult> LoginAsync(
@@ -102,7 +148,12 @@ public static class ApiEndpoints
 
         var user = await db.Users
             .AsNoTracking()
-            .SingleOrDefaultAsync(item => item.NormalizedEmail == normalizedEmail, cancellationToken);
+            .SingleOrDefaultAsync(
+                item =>
+                    item.NormalizedEmail == normalizedEmail &&
+                    item.IsActive &&
+                    item.LocalLoginEnabled,
+                cancellationToken);
 
         if (user is null || !passwords.VerifyPassword(request.Password!, user.PasswordHash))
         {
@@ -112,18 +163,12 @@ public static class ApiEndpoints
                 detail: "The email or password is incorrect.");
         }
 
-        var claims = new[]
-        {
-            new Claim(ClaimTypes.NameIdentifier, user.Id.ToString("D")),
-            new Claim(ClaimTypes.Name, user.Name),
-            new Claim(ClaimTypes.Email, user.Email),
-            new Claim(ClaimTypes.Role, user.Role)
-        };
-        var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);
-        var principal = new ClaimsPrincipal(identity);
+        var principal = SessionPrincipalFactory.Create(
+            user,
+            SessionPrincipalFactory.LocalAuthenticationSource);
 
         await context.SignInAsync(
-            CookieAuthenticationDefaults.AuthenticationScheme,
+            AuthenticationSchemes.Session,
             principal,
             new AuthenticationProperties
             {
@@ -151,7 +196,7 @@ public static class ApiEndpoints
     private static async Task<IResult> LogoutAsync(HttpContext context, ClaimsPrincipal principal)
     {
         _ = principal;
-        await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        await context.SignOutAsync(AuthenticationSchemes.Session);
         return Results.NoContent();
     }
 
@@ -161,6 +206,7 @@ public static class ApiEndpoints
     {
         var users = await db.Users
             .AsNoTracking()
+            .Where(item => item.IsActive)
             .OrderBy(item => item.Name)
             .ToListAsync(cancellationToken);
 
@@ -169,4 +215,28 @@ public static class ApiEndpoints
 
     private static UserResponse ToResponse(User user) =>
         new(user.Id, user.Name, user.Email, user.Role);
+
+    private static bool TryGetLocalReturnUrl(
+        string? value,
+        out string redirectUri)
+    {
+        redirectUri = "/";
+        if (string.IsNullOrEmpty(value))
+        {
+            return true;
+        }
+
+        if (value[0] != '/' ||
+            value.StartsWith("//", StringComparison.Ordinal) ||
+            value.StartsWith("/\\", StringComparison.Ordinal) ||
+            value.Contains('\\') ||
+            value.Any(char.IsControl) ||
+            Uri.TryCreate(value, UriKind.Absolute, out _))
+        {
+            return false;
+        }
+
+        redirectUri = value;
+        return true;
+    }
 }
