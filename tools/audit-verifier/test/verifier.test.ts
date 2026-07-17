@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  AUDIT_GENESIS_HASH,
   AuditVerificationError,
   computeAuditHash,
   formatVerificationSummary,
@@ -20,7 +21,7 @@ interface TestEvent {
 }
 
 function makeChain(canonicalValues: string[]): TestEvent[] {
-  let previousHash = "GENESIS";
+  let previousHash = AUDIT_GENESIS_HASH;
 
   return canonicalValues.map((canonicalData, index) => {
     const event = {
@@ -80,6 +81,56 @@ test("detects changed canonical data", () => {
     (error: unknown) =>
       error instanceof AuditVerificationError &&
       /event #2: hash mismatch/.test(error.message),
+  );
+});
+
+test("enforces the all-zero genesis hash with structured failure details", () => {
+  const events = makeChain(canonicalValues);
+  events[0] = {
+    ...events[0],
+    previousHash: "f".repeat(64),
+  };
+  events[0].hash = computeAuditHash(events[0].previousHash, events[0].canonicalData);
+
+  assert.throws(
+    () => verifyAuditExport(events),
+    (error: unknown) =>
+      error instanceof AuditVerificationError &&
+      error.code === "GENESIS_MISMATCH" &&
+      error.checkedEvents === 1 &&
+      error.brokenAt === 1,
+  );
+});
+
+test("enforces a captured target sequence and chain head", () => {
+  const events = makeChain(canonicalValues);
+  assert.deepEqual(
+    verifyAuditExport(events, {
+      targetSequence: events.length,
+      targetHash: events.at(-1)!.hash,
+    }),
+    { count: events.length, chainHead: events.at(-1)!.hash },
+  );
+
+  assert.throws(
+    () =>
+      verifyAuditExport(events, {
+        targetSequence: events.length - 1,
+        targetHash: events.at(-1)!.hash,
+      }),
+    (error: unknown) =>
+      error instanceof AuditVerificationError &&
+      error.code === "TARGET_SEQUENCE_MISMATCH",
+  );
+
+  assert.throws(
+    () =>
+      verifyAuditExport(events, {
+        targetSequence: events.length,
+        targetHash: "f".repeat(64),
+      }),
+    (error: unknown) =>
+      error instanceof AuditVerificationError && error.code === "TARGET_HASH_MISMATCH",
   );
 });
 

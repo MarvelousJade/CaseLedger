@@ -3,6 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/verifier.ts"
+  },
+  "types": "./src/verifier.ts",
   "scripts": {
     "test": "node --test test/verifier.test.ts",
     "verify": "node src/cli.ts"

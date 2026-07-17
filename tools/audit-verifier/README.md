@@ -1,8 +1,8 @@
 # CaseLedger audit verifier
 
 This dependency-free Node.js 24 tool verifies a CaseLedger audit export without
-contacting the API. It checks contiguous sequence numbers, every `previousHash`
-link, and each stored lowercase SHA-256 hash.
+contacting the API. It checks the all-zero genesis hash, contiguous sequence
+numbers, every `previousHash` link, and each stored lowercase SHA-256 hash.
 
 ## Run
 
@@ -21,6 +21,8 @@ SHA-256(previousHash + "\n" + canonicalData)
 
 A valid export prints the event count and chain head. Invalid JSON, malformed
 events, broken links, and changed hashes print a useful error and exit nonzero.
+Library callers may also supply a captured target sequence and hash; failures
+include stable codes, the number of inspected events, and the broken sequence.
 
 ## Test
 
