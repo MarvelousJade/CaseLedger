@@ -1,0 +1,161 @@
+name: Deploy Azure production
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Preview changes or deploy them
+        required: true
+        type: choice
+        default: plan
+        options:
+          - plan
+          - deploy
+      resource_group:
+        description: Azure resource group
+        required: true
+        type: string
+        default: caseledger-prod
+      location:
+        description: Azure region used when creating the resource group
+        required: true
+        type: string
+        default: canadacentral
+      environment_name:
+        description: Logical deployment environment
+        required: true
+        type: choice
+        default: prod
+        options:
+          - dev
+          - staging
+          - prod
+      image_sha:
+        description: Published 40-character commit SHA; blank uses this workflow commit
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: caseledger-azure-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: azure-production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AZURE_POSTGRES_ADMIN_PASSWORD: ${{ secrets.AZURE_POSTGRES_ADMIN_PASSWORD }}
+      CASELEDGER_SEED_ADMIN_PASSWORD: ${{ secrets.CASELEDGER_SEED_ADMIN_PASSWORD }}
+      RESOURCE_GROUP: ${{ inputs.resource_group }}
+      LOCATION: ${{ inputs.location }}
+      DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment_name }}
+      OPERATION: ${{ inputs.operation }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Log in to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Validate deployment inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          image_sha='${{ inputs.image_sha }}'
+          if [[ -z "$image_sha" ]]; then
+            image_sha="$GITHUB_SHA"
+          fi
+          if [[ ! "$image_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'image_sha must be a lowercase 40-character commit SHA.' >&2
+            exit 1
+          fi
+          if [[ -z "$AZURE_POSTGRES_ADMIN_PASSWORD" || -z "$CASELEDGER_SEED_ADMIN_PASSWORD" ]]; then
+            echo 'The protected Azure environment is missing required password secrets.' >&2
+            exit 1
+          fi
+          echo "IMAGE_SHA=$image_sha" >> "$GITHUB_ENV"
+          echo "API_IMAGE=ghcr.io/marvelousjade/caseledger:$image_sha" >> "$GITHUB_ENV"
+          echo "WORKER_IMAGE=ghcr.io/marvelousjade/caseledger-audit-worker:$image_sha" >> "$GITHUB_ENV"
+
+      - name: Compile Bicep
+        run: az bicep build --file infra/azure/main.bicep --stdout > /dev/null
+
+      - name: Check resource group
+        shell: bash
+        run: |
+          set -euo pipefail
+          exists="$(az group exists --name "$RESOURCE_GROUP")"
+          if [[ "$exists" == 'true' ]]; then
+            exit 0
+          fi
+          if [[ "$OPERATION" == 'plan' ]]; then
+            echo "Resource group '$RESOURCE_GROUP' does not exist. Run deploy to create it before planning updates." >&2
+            exit 1
+          fi
+          az group create \
+            --name "$RESOURCE_GROUP" \
+            --location "$LOCATION" \
+            --only-show-errors > /dev/null
+
+      - name: Preview infrastructure changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group what-if \
+            --name "caseledger-${GITHUB_RUN_ID}" \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/azure/main.bicep \
+            --parameters \
+              environmentName="$DEPLOYMENT_ENVIRONMENT" \
+              apiImage="$API_IMAGE" \
+              workerImage="$WORKER_IMAGE" \
+              postgresAdministratorPassword="$AZURE_POSTGRES_ADMIN_PASSWORD" \
+              seedAdministratorPassword="$CASELEDGER_SEED_ADMIN_PASSWORD" \
+            --only-show-errors
+
+      - name: Deploy infrastructure
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --name "caseledger-${GITHUB_RUN_ID}" \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/azure/main.bicep \
+            --parameters \
+              environmentName="$DEPLOYMENT_ENVIRONMENT" \
+              apiImage="$API_IMAGE" \
+              workerImage="$WORKER_IMAGE" \
+              postgresAdministratorPassword="$AZURE_POSTGRES_ADMIN_PASSWORD" \
+              seedAdministratorPassword="$CASELEDGER_SEED_ADMIN_PASSWORD" \
+            --only-show-errors > deployment.json
+
+      - name: Publish deployment URL
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          api_url="$(jq -r '.properties.outputs.apiUrl.value' deployment.json)"
+          if [[ ! "$api_url" =~ ^https:// ]]; then
+            echo 'Deployment did not return a valid HTTPS API URL.' >&2
+            exit 1
+          fi
+          printf '### Azure deployment\n\n%s\n' "$api_url" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove deployment output
+        if: always()
+        shell: bash
+        run: rm -f deployment.json
