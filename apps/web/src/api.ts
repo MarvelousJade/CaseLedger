@@ -77,6 +77,14 @@ function readNumber(record: Record<string, unknown>, keys: string[], fallback = 
   return fallback
 }
 
+function readBoolean(record: Record<string, unknown>, keys: string[], fallback = false) {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'boolean') return value
+  }
+  return fallback
+}
+
 function readDate(record: Record<string, unknown>, keys: string[]) {
   return readString(record, keys, new Date().toISOString())
 }
@@ -133,6 +141,7 @@ export function normaliseCase(value: unknown): CaseItem {
 
   return {
     id: readString(record, ['id', 'caseId']),
+    version: readString(record, ['version']),
     reference: readString(record, ['reference', 'referenceNumber', 'caseNumber'], 'Pending'),
     title: readString(record, ['title', 'name'], 'Untitled case'),
     summary: readString(record, ['summary', 'description']),
@@ -157,13 +166,34 @@ export function normaliseCase(value: unknown): CaseItem {
 
 function unwrapCollection(value: unknown): CaseCollection {
   if (Array.isArray(value)) {
-    return { items: value.map(normaliseCase), total: value.length }
+    const items = value.map(normaliseCase)
+    return {
+      items,
+      total: items.length,
+      page: 1,
+      pageSize: items.length || 50,
+      totalPages: items.length ? 1 : 0,
+      hasNextPage: false,
+      hasPreviousPage: false,
+    }
   }
   const record = asRecord(value)
   const candidates = [record.items, record.cases, asRecord(record.data).items, asRecord(record.data).cases]
   const list = candidates.find(Array.isArray) as unknown[] | undefined
   const items = (list ?? []).map(normaliseCase)
-  return { items, total: readNumber(record, ['total', 'totalCount'], items.length) }
+  const total = readNumber(record, ['total', 'totalCount'], items.length)
+  const page = readNumber(record, ['page'], 1)
+  const pageSize = readNumber(record, ['pageSize'], items.length || 50)
+  const totalPages = readNumber(record, ['totalPages'], total ? Math.ceil(total / pageSize) : 0)
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    totalPages,
+    hasNextPage: readBoolean(record, ['hasNextPage'], page < totalPages),
+    hasPreviousPage: readBoolean(record, ['hasPreviousPage'], page > 1),
+  }
 }
 
 export const api = {
@@ -196,11 +226,13 @@ export const api = {
     return values.map(normaliseUser)
   },
 
-  async getCases(filters: { search?: string; status?: string; severity?: string } = {}) {
+  async getCases(filters: { search?: string; status?: string; severity?: string; page?: number; pageSize?: number } = {}) {
     const params = new URLSearchParams()
     if (filters.search) params.set('search', filters.search)
     if (filters.status) params.set('status', filters.status)
     if (filters.severity) params.set('severity', filters.severity)
+    if (filters.page !== undefined) params.set('page', String(filters.page))
+    if (filters.pageSize !== undefined) params.set('pageSize', String(filters.pageSize))
     const query = params.size ? `?${params.toString()}` : ''
     return unwrapCollection(await request<unknown>(`/api/cases${query}`))
   },
@@ -218,10 +250,11 @@ export const api = {
     )
   },
 
-  async updateCase(id: string, patch: Record<string, unknown>) {
+  async updateCase(id: string, version: string, patch: Record<string, unknown>) {
     return normaliseCase(
       await request<unknown>(`/api/cases/${encodeURIComponent(id)}`, {
         method: 'PATCH',
+        headers: { 'If-Match': `"${version}"` },
         body: JSON.stringify(patch),
       }),
     )
@@ -304,6 +337,10 @@ export const api = {
 
 export function isUnauthorised(error: unknown) {
   return error instanceof ApiError && (error.status === 401 || error.status === 403)
+}
+
+export function isPreconditionFailed(error: unknown) {
+  return typeof error === 'object' && error !== null && 'status' in error && error.status === 412
 }
 
 export function getErrorMessage(error: unknown, fallback = 'Something went wrong. Please try again.') {

@@ -14,6 +14,7 @@ const assignee: User = {
 
 const createdCase: CaseItem = {
   id: 'case-1',
+  version: '11111111-1111-1111-1111-111111111111',
   reference: 'CL-2026-0100',
   title: 'Credential exposure review',
   summary: 'Review the reported credential exposure.',
@@ -67,9 +68,9 @@ describe('CreateCaseModal', () => {
     const submit = screen.getByRole('button', { name: 'Create case' })
 
     expect(submit).toBeDisabled()
-    await user.type(screen.getByLabelText(/Case title/), '  Credential exposure review  ')
+    fireEvent.change(screen.getByLabelText(/Case title/), { target: { value: '  Credential exposure review  ' } })
     expect(submit).toBeDisabled()
-    await user.type(screen.getByLabelText(/Summary/), '  Review the reported credential exposure.  ')
+    fireEvent.change(screen.getByLabelText(/Summary/), { target: { value: '  Review the reported credential exposure.  ' } })
     expect(submit).toBeEnabled()
 
     await user.selectOptions(screen.getByLabelText('Severity'), 'Critical')
@@ -77,7 +78,7 @@ describe('CreateCaseModal', () => {
     await screen.findByRole('option', { name: assignee.name })
     await user.selectOptions(screen.getByLabelText('Assignee'), assignee.id)
     fireEvent.change(screen.getByLabelText('Target date'), { target: { value: '2026-08-01' } })
-    await user.type(screen.getByLabelText(/Tags/), '#identity, external, , priority')
+    fireEvent.change(screen.getByLabelText(/Tags/), { target: { value: '#identity, external, , priority' } })
     await user.click(submit)
 
     await waitFor(() => expect(createCase).toHaveBeenCalledWith({

@@ -14,6 +14,7 @@ const user: User = {
 
 const activeCase: CaseItem = {
   id: 'case-1',
+  version: '11111111-1111-1111-1111-111111111111',
   reference: 'CL-2026-0042',
   title: 'Review access-control policy anomaly',
   summary: 'Review an unexpected permission grant.',
@@ -63,7 +64,15 @@ describe('DashboardPage', () => {
   it('falls back to a current case rollup when live metrics are unavailable', async () => {
     const browser = userEvent.setup()
     vi.spyOn(api, 'getDashboard').mockRejectedValue(new Error('Metrics unavailable'))
-    vi.spyOn(api, 'getCases').mockResolvedValue({ items: [activeCase, resolvedCase], total: 2 })
+    vi.spyOn(api, 'getCases').mockResolvedValue({
+      items: [activeCase, resolvedCase],
+      total: 2,
+      page: 1,
+      pageSize: 50,
+      totalPages: 1,
+      hasNextPage: false,
+      hasPreviousPage: false,
+    })
     const { onSelectCase } = renderDashboard()
 
     expect(await screen.findByText(/Live dashboard metrics are unavailable/)).toBeVisible()
@@ -88,7 +97,15 @@ describe('DashboardPage', () => {
       .mockResolvedValueOnce(dashboard)
     vi.spyOn(api, 'getCases')
       .mockRejectedValueOnce(new Error('Cases unavailable'))
-      .mockResolvedValueOnce({ items: [], total: 0 })
+      .mockResolvedValueOnce({
+        items: [],
+        total: 0,
+        page: 1,
+        pageSize: 50,
+        totalPages: 0,
+        hasNextPage: false,
+        hasPreviousPage: false,
+      })
     renderDashboard()
 
     expect(await screen.findByRole('heading', { name: 'We hit a snag' })).toBeVisible()

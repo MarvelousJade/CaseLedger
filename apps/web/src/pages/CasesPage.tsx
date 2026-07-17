@@ -7,12 +7,24 @@ import { Assignee, CaseTableSkeleton, EmptyState, ErrorState, PageHeading, Sever
 
 const statuses = ['New', 'InProgress', 'Resolved']
 const severities = ['Low', 'Medium', 'High', 'Critical']
+const pageSize = 10
+
+const emptyCollection: CaseCollection = {
+  items: [],
+  total: 0,
+  page: 1,
+  pageSize,
+  totalPages: 0,
+  hasNextPage: false,
+  hasPreviousPage: false,
+}
 
 export function CasesPage({ refreshKey, onCreate, onSelectCase }: { refreshKey: number; onCreate: () => void; onSelectCase: (id: string) => void }) {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('')
   const [severity, setSeverity] = useState('')
-  const [collection, setCollection] = useState<CaseCollection>({ items: [], total: 0 })
+  const [page, setPage] = useState(1)
+  const [collection, setCollection] = useState<CaseCollection>(emptyCollection)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
@@ -22,15 +34,22 @@ export function CasesPage({ refreshKey, onCreate, onSelectCase }: { refreshKey: 
     let active = true
     setLoading(true)
     setError('')
-    api.getCases({ search: debouncedSearch, status, severity })
-      .then((result) => { if (active) setCollection(result) })
+    api.getCases({ search: debouncedSearch, status, severity, page, pageSize })
+      .then((result) => {
+        if (!active) return
+        if (result.totalPages > 0 && page > result.totalPages) {
+          setPage(result.totalPages)
+          return
+        }
+        setCollection(result)
+      })
       .catch((requestError) => { if (active) setError(getErrorMessage(requestError, 'Cases could not be loaded.')) })
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
-  }, [debouncedSearch, status, severity, refreshKey, reloadKey])
+  }, [debouncedSearch, status, severity, page, refreshKey, reloadKey])
 
   const hasFilters = Boolean(search || status || severity)
-  const clearFilters = () => { setSearch(''); setStatus(''); setSeverity('') }
+  const clearFilters = () => { setSearch(''); setStatus(''); setSeverity(''); setPage(1) }
 
   return (
     <div className="page cases-page">
@@ -44,18 +63,34 @@ export function CasesPage({ refreshKey, onCreate, onSelectCase }: { refreshKey: 
         <div className="case-toolbar">
           <label className="search-field">
             <span className="sr-only">Search cases</span><Icon name="search" size={18} />
-            <input placeholder="Search title, reference, or assignee…" value={search} onChange={(event) => setSearch(event.target.value)} />
-            {search && <button onClick={() => setSearch('')} aria-label="Clear search"><Icon name="close" size={15} /></button>}
+            <input placeholder="Search title, reference, or assignee…" value={search} onChange={(event) => { setSearch(event.target.value); setPage(1) }} />
+            {search && <button type="button" onClick={() => { setSearch(''); setPage(1) }} aria-label="Clear search"><Icon name="close" size={15} /></button>}
           </label>
           <div className="filter-group">
-            <label className="select-wrap"><span className="sr-only">Filter by status</span><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option>{statuses.map((item) => <option key={item} value={item}>{titleCase(item)}</option>)}</select><Icon name="chevron-down" size={15} /></label>
-            <label className="select-wrap"><span className="sr-only">Filter by severity</span><select value={severity} onChange={(event) => setSeverity(event.target.value)}><option value="">All severity</option>{severities.map((item) => <option key={item} value={item}>{item}</option>)}</select><Icon name="chevron-down" size={15} /></label>
+            <label className="select-wrap"><span className="sr-only">Filter by status</span><select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1) }}><option value="">All statuses</option>{statuses.map((item) => <option key={item} value={item}>{titleCase(item)}</option>)}</select><Icon name="chevron-down" size={15} /></label>
+            <label className="select-wrap"><span className="sr-only">Filter by severity</span><select value={severity} onChange={(event) => { setSeverity(event.target.value); setPage(1) }}><option value="">All severity</option>{severities.map((item) => <option key={item} value={item}>{item}</option>)}</select><Icon name="chevron-down" size={15} /></label>
           </div>
         </div>
-        <div className="case-count"><span>{loading ? 'Loading cases…' : `${collection.total} ${collection.total === 1 ? 'case' : 'cases'}`}</span>{hasFilters && <button onClick={clearFilters}>Clear filters</button>}</div>
+        <div className="case-count" aria-live="polite"><span>{loading ? 'Loading cases…' : `${collection.total} ${collection.total === 1 ? 'case' : 'cases'}`}</span>{hasFilters && <button type="button" onClick={clearFilters}>Clear filters</button>}</div>
         {loading ? <CaseTableSkeleton /> : error ? <ErrorState message={error} onRetry={() => setReloadKey((key) => key + 1)} compact /> : collection.items.length ? <CaseTable items={collection.items} onSelect={onSelectCase} /> : <EmptyState icon={hasFilters ? 'search' : 'folder'} title={hasFilters ? 'No matching cases' : 'Your ledger is ready'} message={hasFilters ? 'Try a different search term or clear a filter.' : 'Create your first case to start a secure activity trail.'} action={hasFilters ? <button className="button button--secondary" onClick={clearFilters}>Clear filters</button> : <button className="button button--primary" onClick={onCreate}><Icon name="plus" size={17} /> Create case</button>} />}
+        {!error && collection.totalPages > 1 && <CasePagination collection={collection} loading={loading} onPageChange={setPage} />}
       </section>
     </div>
+  )
+}
+
+function CasePagination({ collection, loading, onPageChange }: { collection: CaseCollection; loading: boolean; onPageChange: (page: number) => void }) {
+  const firstItem = (collection.page - 1) * collection.pageSize + 1
+  const lastItem = Math.min(firstItem + collection.items.length - 1, collection.total)
+  return (
+    <nav className="case-pagination" aria-label="Case pages">
+      <span className="case-pagination__summary" aria-live="polite">Showing {firstItem}–{lastItem} of {collection.total} cases</span>
+      <div className="case-pagination__controls">
+        <button className="button button--ghost case-pagination__previous" type="button" disabled={loading || !collection.hasPreviousPage} onClick={() => onPageChange(collection.page - 1)}><Icon name="arrow-right" size={15} /> Previous</button>
+        <span>Page <b>{collection.page}</b> of {collection.totalPages}</span>
+        <button className="button button--ghost" type="button" disabled={loading || !collection.hasNextPage} onClick={() => onPageChange(collection.page + 1)}>Next <Icon name="arrow-right" size={15} /></button>
+      </div>
+    </nav>
   )
 }
 
@@ -82,4 +117,3 @@ function CaseTable({ items, onSelect }: { items: CaseItem[]; onSelect: (id: stri
     </div>
   )
 }
-

@@ -29,6 +29,7 @@ export interface Activity {
 
 export interface CaseItem {
   id: string
+  version: string
   reference: string
   title: string
   summary: string
@@ -49,6 +50,11 @@ export interface CaseItem {
 export interface CaseCollection {
   items: CaseItem[]
   total: number
+  page: number
+  pageSize: number
+  totalPages: number
+  hasNextPage: boolean
+  hasPreviousPage: boolean
 }
 
 export interface DashboardData {

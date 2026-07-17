@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { api, getErrorMessage } from '../api'
+import { api, getErrorMessage, isPreconditionFailed } from '../api'
 import { Icon } from '../Icons'
 import type { CaseItem, IntegrityResult } from '../types'
 import { formatRelative, titleCase } from '../utils'
@@ -66,11 +66,16 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
     if (!item || status === item.status) return
     setSavingStatus(true)
     try {
-      await api.updateCase(item.id, { status })
+      await api.updateCase(item.id, item.version, { status })
       notify(`Status changed to ${titleCase(status)}.`)
       reload()
     } catch (requestError) {
-      notify(getErrorMessage(requestError, 'Status could not be updated.'), 'danger')
+      if (isPreconditionFailed(requestError)) {
+        notify('This case changed since you opened it. The latest details have been reloaded.', 'danger')
+        reload()
+      } else {
+        notify(getErrorMessage(requestError, 'Status could not be updated.'), 'danger')
+      }
     } finally {
       setSavingStatus(false)
     }
@@ -171,4 +176,3 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
 function DetailSkeleton() {
   return <div className="detail-loading"><span className="skeleton skeleton--pill" /><span className="skeleton skeleton--heading" /><span className="skeleton skeleton--block" />{Array.from({ length: 3 }).map((_, index) => <span key={index} className="skeleton skeleton--row" />)}</div>
 }
-
