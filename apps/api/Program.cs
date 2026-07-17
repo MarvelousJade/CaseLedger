@@ -5,6 +5,7 @@ using CaseLedger.Api.Data;
 using CaseLedger.Api.Endpoints;
 using CaseLedger.Api.GraphQL;
 using CaseLedger.Api.Messaging;
+using CaseLedger.Api.Realtime;
 using CaseLedger.Api.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http.Json;
@@ -83,7 +84,35 @@ builder.Services.AddScoped<AuditChainService>();
 builder.Services.Configure<MessagingOptions>(
     builder.Configuration.GetSection(MessagingOptions.SectionName));
 builder.Services.AddScoped<AuditVerificationScheduler>();
+builder.Services.AddScoped<AuditVerificationResultHandler>();
+builder.Services.AddSingleton<IVerificationUpdateNotifier, SignalRVerificationUpdateNotifier>();
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSignalR();
 builder.Services.AddScoped<DatabaseSeeder>();
+
+var messagingOptions = builder.Configuration
+    .GetSection(MessagingOptions.SectionName)
+    .Get<MessagingOptions>() ?? new MessagingOptions();
+if (messagingOptions.Enabled &&
+    !builder.Environment.IsEnvironment("Testing"))
+{
+    if (!string.Equals(
+            messagingOptions.Provider,
+            "RabbitMq",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException(
+            "Messaging:Provider must be RabbitMq when messaging is enabled.");
+    }
+
+    _ = RabbitMqConnectionFactory.Create(messagingOptions);
+    builder.Services.AddSingleton<RabbitMqOutboxTransport>();
+    builder.Services.AddSingleton<IOutboxTransport>(
+        services => services.GetRequiredService<RabbitMqOutboxTransport>());
+    builder.Services.AddScoped<OutboxDispatchProcessor>();
+    builder.Services.AddHostedService<OutboxDispatcherHostedService>();
+    builder.Services.AddHostedService<RabbitMqAuditResultConsumer>();
+}
 
 builder.Services.AddRateLimiter(options =>
 {
@@ -173,6 +202,8 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .WithSummary("Check API process health")
     .Produces(StatusCodes.Status200OK);
 app.MapCaseLedgerApi();
+app.MapHub<CaseUpdatesHub>("/hubs/cases")
+    .RequireAuthorization();
 app.MapGraphQL("/graphql")
     .RequireAuthorization()
     .RequireRateLimiting("authenticated")
