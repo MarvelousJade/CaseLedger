@@ -254,7 +254,7 @@ For local traces, metrics, logs, and the provisioned Grafana dashboard, add the 
 Compose overlay described in [operations.md](docs/operations.md). That stack is for development
 and demonstrations only; it is not a production monitoring deployment.
 
-The public demo runs on Render from the checked-in Dockerfile after repository checks pass. Its PostgreSQL data is hosted by Neon. CI also publishes versioned API and worker images to GHCR. Messaging and webhooks remain disabled on Render unless an operator explicitly provisions and configures the required infrastructure.
+The public demo runs on Render from an immutable GHCR API image selected after repository checks pass. Its PostgreSQL data is hosted by Neon. CI publishes versioned API and worker images to GHCR; the image-backed Render service is updated deliberately after a green run. Messaging and webhooks remain disabled there unless an operator explicitly provisions and configures the required infrastructure.
 
 ## Repository layout
 

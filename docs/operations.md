@@ -190,9 +190,14 @@ or webhook secrets, message bodies, and uploaded content.
 
 ## Render demo behavior
 
-The checked-in Render Blueprint configures only the API/SPA and PostgreSQL connection. It does not
-enable messaging or webhooks. This is intentional: the public demo keeps the synchronous client
-fallback and does not claim an Azure Service Bus or hosted worker deployment.
+The current public demo is an image-backed Render service. CI publishes immutable API and worker
+images to GHCR, and the API image is selected for Render only after the repository checks pass.
+The service has no hosted worker or broker; messaging and webhooks therefore stay disabled and the
+client uses synchronous verification fallback.
+
+The checked-in `render.yaml` remains a valid repo-based Blueprint option and explicitly keeps both
+features disabled. It does not describe the separate image-backed service's update mechanism, and
+it does not claim an Azure Service Bus deployment.
 
 ## Shutdown
 
