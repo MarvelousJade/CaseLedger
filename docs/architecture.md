@@ -10,9 +10,12 @@ Primary goals:
 - Give the React client a focused workflow rather than exposing database-shaped forms.
 - Preserve an append-only account of every case mutation.
 - Allow a second implementation to verify exported history independently.
+- Reject lost updates with explicit HTTP preconditions.
+- Expose operational signals without placing case content in telemetry.
 - Run locally without infrastructure while retaining a PostgreSQL deployment path.
 
-Non-goals include file-content storage, public registration, real-time collaboration, external notifications, and distributed services.
+Non-goals include file-content storage, public registration, real-time collaboration, external
+notifications, distributed services, and a production monitoring backend.
 
 ## Runtime components
 
@@ -22,17 +25,25 @@ The TypeScript client owns presentation state, accessible interactions, search/f
 
 The development server proxies `/api` and `/graphql` to the API. In the container image, the compiled SPA is copied into the API's `wwwroot` directory and served from the same origin.
 
+Vitest runs the client component suite in jsdom with React Testing Library and `user-event`.
+The tests drive controls through their accessible names and cover login outcomes, dialog focus and
+Escape behavior, case creation, dashboard failure recovery, server pagination, strong ETag headers,
+and stale-update handling.
+
 ### ASP.NET Core API
 
 The API owns:
 
 - HTTP-only cookie sessions and role claims
 - request validation and Problem Details responses
+- OpenAPI JSON at `/swagger/v1/swagger.json` and Swagger UI at `/swagger`
 - case reference allocation and domain transitions
+- page-based list projections and strong ETag preconditions
 - EF Core persistence
 - canonical audit event creation
 - audit verification and administrator-only export
 - dashboard aggregation through GraphQL
+- structured JSON logs and OpenTelemetry instrumentation
 
 REST endpoints use minimal API route groups. The focused GraphQL query is a separate read model rather than a second mutation surface.
 
@@ -59,6 +70,7 @@ erDiagram
     }
     CASE_RECORD {
       uuid id PK
+      uuid version "concurrency token"
       string reference UK
       string status
       string severity
@@ -84,9 +96,44 @@ erDiagram
 
 A unique `(CaseId, Sequence)` index prevents duplicate positions, and a unique case reference index protects human-readable identifiers.
 
+`CaseRecord.Version` is an application-managed GUID concurrency token. EF Core assigns a new GUID
+on every tracked case update. REST list/detail representations expose it, while creates and detail
+responses also publish it as a strong ETag.
+
 ### Node.js verifier
 
 The verifier has no runtime dependencies and never contacts the API. It accepts either an export envelope or a raw event array, supports camelCase and PascalCase property names, and exits nonzero on invalid input or tampering. Keeping this verifier independent reduces the chance that verification merely repeats a shared implementation bug.
+
+### Observability pipeline
+
+The API writes UTC JSON console logs with trace and span correlation. ASP.NET Core, outbound HTTP,
+runtime, and CaseLedger business instrumentation produce traces and metrics under the
+`CaseLedger.Api` source and meter. Business signals use bounded labels such as severity, media type
+group, audit event type, and verification result.
+
+```mermaid
+flowchart LR
+    API[ASP.NET Core API]
+    Console[JSON console logs]
+    OTLP[OTLP exporter]
+    Backend[Local OTel LGTM backend]
+    Grafana[Grafana dashboard]
+
+    API --> Console
+    API -. conditional traces, metrics, and logs .-> OTLP
+    OTLP --> Backend
+    Backend --> Grafana
+```
+
+The OTLP trace, metric, and log exporters are registered only when
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set. Without it, structured console logging remains active and no
+remote export is attempted. `compose.observability.yaml` supplies a loopback-only local collector
+and Grafana instance for development and demonstrations; it is not a production retention,
+authentication, TLS, or alerting design.
+
+Telemetry contains case/evidence identifiers, bounded categories, counts, sizes, and timings. It
+does not contain evidence filenames, user email addresses, passwords, cookies, authorization
+secrets, request bodies, or uploaded file content.
 
 ## Mutation and audit sequence
 
@@ -97,20 +144,31 @@ sequenceDiagram
     participant Audit as AuditChainService
     participant DB as EF Core database
 
-    UI->>API: Validated command
-    API->>DB: Load actor and case
-    API->>API: Apply domain change
-    API->>Audit: Append event + normalized data
-    Audit->>DB: Read current chain head
-    Audit->>Audit: Build canonicalData
-    Audit->>Audit: SHA-256(previousHash + newline + canonicalData)
-    Audit->>DB: Stage immutable AuditEvent
-    API->>DB: Save mutation and event together
-    DB-->>API: Commit
-    API-->>UI: Updated case projection
+    UI->>API: PATCH command + If-Match: "version"
+    API->>DB: Load actor and current case version
+    alt Missing, malformed, or stale precondition
+        API-->>UI: 428, 400, or 412 Problem Details
+    else Current strong ETag
+        API->>API: Apply domain change
+        API->>Audit: Append event + normalized data
+        Audit->>DB: Read current chain head
+        Audit->>Audit: Build canonicalData
+        Audit->>Audit: SHA-256(previousHash + newline + canonicalData)
+        Audit->>DB: Stage immutable AuditEvent
+        API->>DB: Save mutation and event together
+        DB-->>API: Commit
+        API-->>UI: Updated projection + new version/ETag
+    end
 ```
 
 The first event uses 64 zeroes as its previous hash. Subsequent events use the exact lowercase hash of the preceding event. Canonical JSON contains version, event ID, case ID, sequence, event type, description, actor identity, UTC timestamp, and sorted event-specific data.
+
+Creates do not require a precondition; they return the initial version and ETag. PostgreSQL
+`timestamp with time zone` persists microsecond precision, while .NET `DateTime` can represent
+100-nanosecond ticks. Before canonical JSON is created or an audit event is persisted, CaseLedger
+converts the timestamp to UTC and truncates sub-microsecond ticks. Verification formats the stored
+value through the same normalization. This keeps canonical hashes stable across SQLite and
+PostgreSQL round trips rather than hashing precision the deployment database cannot retain.
 
 Verification checks:
 
@@ -139,6 +197,9 @@ Evidence handling has a similar explicit boundary. The browser calculates a file
 ## Failure handling
 
 - Invalid requests return field-level validation details.
+- Case-list paging returns stable page, page-size, total-page, and next/previous metadata.
+- A missing update precondition returns 428; malformed or weak ETags return 400; stale versions return 412 with the current ETag.
+- After a 412, the React client reports the conflict and reloads the current case without retrying the mutation.
 - Missing cases return a 404 Problem Details document.
 - Unauthenticated and unauthorized requests return 401 and 403 JSON responses.
 - UI requests preserve loading, empty, error, and retry states.
@@ -147,20 +208,27 @@ Evidence handling has a similar explicit boundary. The browser calculates a file
 
 ## Test strategy
 
-The API tests start the real web application with an isolated SQLite file and exercise it through HTTP:
+The test layers have deliberately different scopes:
 
-- unauthorized access and cookie login
-- create, update, comment, and evidence registration
-- search and detailed projections
-- GraphQL aggregate results
-- analyst/admin authorization differences
-- JSON audit export
-- tracked immutability enforcement
-- raw SQL tampering detection
+1. Vitest and React Testing Library exercise client behavior in jsdom, including accessible
+   interactions, request headers, filters, paging, error recovery, and optimistic-concurrency UI.
+2. API tests start the real ASP.NET Core application with an isolated SQLite file and exercise
+   authentication, lifecycle commands, pagination metadata, OpenAPI, ETags, authorization,
+   telemetry label hygiene, GraphQL, tracked immutability, timestamp precision, and raw SQL
+   tampering through HTTP and the service boundary.
+3. Node.js tests independently cover valid audit envelopes, PascalCase input, content changes,
+   broken links, sequence changes, and CLI exit codes.
+4. Playwright builds the production container and starts a disposable PostgreSQL 17 stack. It
+   drives analyst login, case creation, evidence hashing/registration, successful verification,
+   direct database tampering, and verification failure through a real Chromium browser.
 
-Node.js tests independently cover valid envelopes, PascalCase input, content changes, broken links, sequence changes, and CLI exit codes. The root `npm run check` command matches the CI workflow.
+`npm run check` runs the first three fast layers (plus lint and production builds). CI runs that
+verification job first, then runs the Docker/PostgreSQL Playwright workflows in a dependent E2E
+job. Locally, the browser layer remains an explicit `npm run test:e2e` command because it requires
+Docker and Chromium.
 
 ## Production evolution
 
-The next practical steps would be reviewed EF Core migrations, external identity, server-side evidence ingestion, optimistic concurrency for case references and chain appends, pagination cursors, signed chain-head anchoring, request tracing, and deployment-specific health checks.
-
+The next practical steps would be external identity, anti-forgery protection, server-side evidence
+ingestion, signed chain-head anchoring, cursor pagination for very large datasets, managed telemetry
+storage with access control and retention policies, alerting, and deeper deployment health checks.
