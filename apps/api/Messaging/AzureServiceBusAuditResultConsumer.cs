@@ -35,7 +35,7 @@ public sealed class AzureServiceBusAuditResultConsumer(
     private async Task ProcessUntilStoppedAsync(CancellationToken stoppingToken)
     {
         var settings = options.Value.AzureServiceBus;
-        await using var client = new ServiceBusClient(settings.ConnectionString!);
+        await using var client = AzureServiceBusClientFactory.Create(settings);
         await using var processor = client.CreateProcessor(
             settings.TopicName!,
             settings.ResultSubscriptionName!,

@@ -28,7 +28,7 @@ public sealed class AzureServiceBusSdkMessageSender
     public AzureServiceBusSdkMessageSender(IOptions<MessagingOptions> options)
     {
         var settings = options.Value.AzureServiceBus;
-        client = new ServiceBusClient(settings.ConnectionString!);
+        client = AzureServiceBusClientFactory.Create(settings);
         sender = client.CreateSender(settings.TopicName!);
     }
 

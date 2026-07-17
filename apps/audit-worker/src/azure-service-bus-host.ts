@@ -16,7 +16,7 @@ export async function startAzureServiceBusHost(
   context: BrokerHostContext,
   clientFactory: ServiceBusClientFactory = defaultServiceBusClientFactory,
 ): Promise<BrokerRuntime> {
-  const client = clientFactory(broker.connectionString);
+  const client = clientFactory(broker);
   const receiver = client.createReceiver(
     broker.topic,
     broker.requestSubscription,

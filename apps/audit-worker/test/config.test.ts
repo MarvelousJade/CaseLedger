@@ -42,6 +42,51 @@ test("loads Azure Service Bus topic/subscription settings without requiring AMQP
   });
 });
 
+test("loads Azure Service Bus managed identity settings without a secret", () => {
+  const config = readConfig({
+    BROKER_PROVIDER: "azure-service-bus",
+    AUDIT_WORKER_DATABASE_URL: databaseUrl,
+    AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:
+      "caseledger.servicebus.windows.net",
+    AZURE_MANAGED_IDENTITY_CLIENT_ID:
+      "db1f1b1b-5570-4958-89e0-13c5ebd52922",
+    AZURE_SERVICE_BUS_TOPIC: "audit-messages",
+    AZURE_SERVICE_BUS_REQUEST_SUBSCRIPTION: "audit-worker",
+  });
+
+  assert.deepEqual(config.broker, {
+    provider: "azure-service-bus",
+    fullyQualifiedNamespace: "caseledger.servicebus.windows.net",
+    managedIdentityClientId: "db1f1b1b-5570-4958-89e0-13c5ebd52922",
+    topic: "audit-messages",
+    requestSubscription: "audit-worker",
+  });
+});
+
+test("rejects ambiguous Azure Service Bus credential sources", () => {
+  const connectionString = fakeServiceBusConnectionString(
+    "caseledger.servicebus.windows.net",
+    "private",
+  );
+
+  assert.throws(
+    () =>
+      readConfig({
+        BROKER_PROVIDER: "azure-service-bus",
+        AUDIT_WORKER_DATABASE_URL: databaseUrl,
+        AZURE_SERVICE_BUS_CONNECTION_STRING: connectionString,
+        AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE:
+          "caseledger.servicebus.windows.net",
+        AZURE_SERVICE_BUS_TOPIC: "audit-messages",
+        AZURE_SERVICE_BUS_REQUEST_SUBSCRIPTION: "audit-worker",
+      }),
+    (error: unknown) =>
+      error instanceof Error &&
+      !error.message.includes(connectionString) &&
+      !error.message.includes("private"),
+  );
+});
+
 test("configuration failures name fields but never echo connection strings", () => {
   const connectionString = fakeServiceBusConnectionString(
     "secret.servicebus.windows.net",

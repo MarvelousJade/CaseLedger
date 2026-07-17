@@ -34,6 +34,51 @@ public sealed class AzureServiceBusMessagingTests
     }
 
     [Fact]
+    public void ProviderValidationAcceptsManagedIdentityNamespace()
+    {
+        var provider = MessagingRuntimeOptions.Validate(
+            new MessagingOptions
+            {
+                Provider = "AzureServiceBus",
+                AzureServiceBus = new AzureServiceBusOptions
+                {
+                    FullyQualifiedNamespace =
+                        "caseledger.servicebus.windows.net",
+                    ManagedIdentityClientId =
+                        "0d61f55d-4064-4f7a-bd48-904bd639f28a",
+                    TopicName = "caseledger-audit",
+                    ResultSubscriptionName = "api-results-v1"
+                }
+            });
+
+        Assert.Equal(MessagingProviderKind.AzureServiceBus, provider);
+    }
+
+    [Fact]
+    public void ProviderValidationRejectsAmbiguousAzureCredentials()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => MessagingRuntimeOptions.Validate(
+                new MessagingOptions
+                {
+                    Provider = "AzureServiceBus",
+                    AzureServiceBus = new AzureServiceBusOptions
+                    {
+                        ConnectionString = ConnectionString,
+                        FullyQualifiedNamespace =
+                            "caseledger.servicebus.windows.net",
+                        TopicName = "caseledger-audit",
+                        ResultSubscriptionName = "api-results-v1"
+                    }
+                }));
+
+        Assert.DoesNotContain(
+            ConnectionString,
+            exception.ToString(),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void InvalidAzureConfigurationNeverEchoesConnectionString()
     {
         const string sensitiveValue = "DO_NOT_LEAK_CONNECTION_SECRET";

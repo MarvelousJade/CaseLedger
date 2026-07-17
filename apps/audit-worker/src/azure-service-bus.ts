@@ -7,6 +7,7 @@ import {
   type ServiceBusReceiverOptions,
   type ServiceBusSender,
 } from "@azure/service-bus";
+import { DefaultAzureCredential } from "@azure/identity";
 import type { BrokerDelivery, VerificationDeliveryHandler } from "./delivery-handler.ts";
 import {
   REQUEST_MESSAGE_TYPE,
@@ -14,6 +15,7 @@ import {
   type VerificationRequest,
   type VerificationResultMessage,
 } from "./contracts.ts";
+import type { AzureServiceBusBrokerConfig } from "./config.ts";
 import type { ResultPublisher } from "./outbox-publisher.ts";
 import type { RetryTier } from "./topology.ts";
 
@@ -125,10 +127,25 @@ export interface ServiceBusClientLike {
   close(): Promise<void>;
 }
 
-export type ServiceBusClientFactory = (connectionString: string) => ServiceBusClientLike;
+export type ServiceBusClientFactory = (
+  config: AzureServiceBusBrokerConfig,
+) => ServiceBusClientLike;
 
-export function defaultServiceBusClientFactory(connectionString: string): ServiceBusClientLike {
-  return new ServiceBusClient(connectionString, {
+export function defaultServiceBusClientFactory(
+  config: AzureServiceBusBrokerConfig,
+): ServiceBusClientLike {
+  if (config.connectionString !== undefined) {
+    return new ServiceBusClient(config.connectionString, {
+      identifier: "caseledger-audit-worker",
+    });
+  }
+
+  const credential = new DefaultAzureCredential(
+    config.managedIdentityClientId === undefined
+      ? {}
+      : { managedIdentityClientId: config.managedIdentityClientId },
+  );
+  return new ServiceBusClient(config.fullyQualifiedNamespace, credential, {
     identifier: "caseledger-audit-worker",
   });
 }

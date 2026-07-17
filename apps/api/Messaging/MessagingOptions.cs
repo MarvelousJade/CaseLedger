@@ -22,6 +22,8 @@ public sealed class RabbitMqOptions
 public sealed class AzureServiceBusOptions
 {
     public string? ConnectionString { get; init; }
+    public string? FullyQualifiedNamespace { get; init; }
+    public string? ManagedIdentityClientId { get; init; }
     public string? TopicName { get; init; }
     public string? ResultSubscriptionName { get; init; }
 }

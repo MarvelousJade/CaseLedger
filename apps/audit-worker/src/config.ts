@@ -19,7 +19,9 @@ const rabbitEnvironmentSchema = z.object({
 });
 
 const serviceBusEnvironmentSchema = z.object({
-  AZURE_SERVICE_BUS_CONNECTION_STRING: z.string().min(1),
+  AZURE_SERVICE_BUS_CONNECTION_STRING: z.string().min(1).optional(),
+  AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE: z.string().min(1).max(255).optional(),
+  AZURE_MANAGED_IDENTITY_CLIENT_ID: z.uuid().optional(),
   AZURE_SERVICE_BUS_TOPIC: z.string().min(1).max(260),
   AZURE_SERVICE_BUS_REQUEST_SUBSCRIPTION: z.string().min(1).max(50),
 });
@@ -29,12 +31,24 @@ export interface RabbitMqBrokerConfig {
   amqpUrl: string;
 }
 
-export interface AzureServiceBusBrokerConfig {
+interface AzureServiceBusBrokerConfigBase {
   provider: "azure-service-bus";
-  connectionString: string;
   topic: string;
   requestSubscription: string;
 }
+
+export type AzureServiceBusBrokerConfig = AzureServiceBusBrokerConfigBase & (
+  | {
+      connectionString: string;
+      fullyQualifiedNamespace?: never;
+      managedIdentityClientId?: never;
+    }
+  | {
+      connectionString?: never;
+      fullyQualifiedNamespace: string;
+      managedIdentityClientId?: string;
+    }
+);
 
 export type BrokerConfig = RabbitMqBrokerConfig | AzureServiceBusBrokerConfig;
 
@@ -94,12 +108,61 @@ function readBrokerConfig(
   if (!parsed.success) {
     throw configurationError(parsed.error);
   }
-  return {
+
+  const connectionString = parsed.data.AZURE_SERVICE_BUS_CONNECTION_STRING;
+  const fullyQualifiedNamespace =
+    parsed.data.AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE;
+  if ((connectionString === undefined) === (fullyQualifiedNamespace === undefined)) {
+    throw new Error(
+      "invalid worker configuration: " +
+        "AZURE_SERVICE_BUS_CONNECTION_STRING, " +
+        "AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE",
+    );
+  }
+
+  const common = {
     provider,
-    connectionString: parsed.data.AZURE_SERVICE_BUS_CONNECTION_STRING,
     topic: parsed.data.AZURE_SERVICE_BUS_TOPIC,
     requestSubscription: parsed.data.AZURE_SERVICE_BUS_REQUEST_SUBSCRIPTION,
-  };
+  } as const;
+  if (connectionString !== undefined) {
+    if (parsed.data.AZURE_MANAGED_IDENTITY_CLIENT_ID !== undefined) {
+      throw new Error(
+        "invalid worker configuration: AZURE_MANAGED_IDENTITY_CLIENT_ID",
+      );
+    }
+    return { ...common, connectionString };
+  }
+
+  if (!isFullyQualifiedNamespace(fullyQualifiedNamespace!)) {
+    throw new Error(
+      "invalid worker configuration: " +
+        "AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE",
+    );
+  }
+  const managedIdentityClientId =
+    parsed.data.AZURE_MANAGED_IDENTITY_CLIENT_ID;
+  return managedIdentityClientId === undefined
+    ? { ...common, fullyQualifiedNamespace: fullyQualifiedNamespace! }
+    : {
+        ...common,
+        fullyQualifiedNamespace: fullyQualifiedNamespace!,
+        managedIdentityClientId,
+      };
+}
+
+function isFullyQualifiedNamespace(value: string): boolean {
+  try {
+    const url = new URL(`https://${value}`);
+    return (
+      url.hostname === value.toLowerCase() &&
+      url.pathname === "/" &&
+      !value.includes(":") &&
+      value.includes(".")
+    );
+  } catch {
+    return false;
+  }
 }
 
 function configurationError(error: z.ZodError): Error {

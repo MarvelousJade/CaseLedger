@@ -46,33 +46,74 @@ public static class MessagingRuntimeOptions
 
     private static void ValidateAzureServiceBus(AzureServiceBusOptions? options)
     {
-        if (string.IsNullOrWhiteSpace(options?.ConnectionString))
+        if (options is null)
         {
             throw InvalidAzureConfiguration();
         }
 
-        ServiceBusConnectionStringProperties properties;
-        try
+        var hasConnectionString =
+            !string.IsNullOrWhiteSpace(options.ConnectionString);
+        var hasNamespace =
+            !string.IsNullOrWhiteSpace(options.FullyQualifiedNamespace);
+        if (hasConnectionString == hasNamespace ||
+            (hasConnectionString &&
+             !string.IsNullOrWhiteSpace(options.ManagedIdentityClientId)))
         {
-            properties = ServiceBusConnectionStringProperties.Parse(
-                options.ConnectionString);
+            throw InvalidAzureConfiguration();
         }
-        catch (Exception exception) when (
-            exception is ArgumentException or FormatException)
+
+        if (hasConnectionString)
+        {
+            ServiceBusConnectionStringProperties properties;
+            try
+            {
+                properties = ServiceBusConnectionStringProperties.Parse(
+                    options.ConnectionString);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or FormatException)
+            {
+                throw InvalidAzureConfiguration();
+            }
+
+            if (!string.IsNullOrWhiteSpace(properties.EntityPath) &&
+                !string.Equals(
+                    properties.EntityPath,
+                    options.TopicName,
+                    StringComparison.Ordinal))
+            {
+                throw InvalidAzureConfiguration();
+            }
+        }
+        else if (!IsFullyQualifiedNamespace(options.FullyQualifiedNamespace) ||
+                 (!string.IsNullOrWhiteSpace(options.ManagedIdentityClientId) &&
+                  !Guid.TryParse(options.ManagedIdentityClientId, out _)))
         {
             throw InvalidAzureConfiguration();
         }
 
         if (!IsSafeEntityName(options.TopicName, maximumLength: 260) ||
-            !IsSafeEntityName(options.ResultSubscriptionName, maximumLength: 50) ||
-            (!string.IsNullOrWhiteSpace(properties.EntityPath) &&
-             !string.Equals(
-                 properties.EntityPath,
-                 options.TopicName,
-                 StringComparison.Ordinal)))
+            !IsSafeEntityName(options.ResultSubscriptionName, maximumLength: 50))
         {
             throw InvalidAzureConfiguration();
         }
+    }
+
+    private static bool IsFullyQualifiedNamespace(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length > 255 ||
+            !string.Equals(value, value.Trim(), StringComparison.Ordinal) ||
+            Uri.CheckHostName(value) != UriHostNameType.Dns)
+        {
+            return false;
+        }
+
+        return Uri.TryCreate($"sb://{value}", UriKind.Absolute, out var uri) &&
+               string.Equals(uri.Host, value, StringComparison.OrdinalIgnoreCase) &&
+               uri.AbsolutePath == "/" &&
+               string.IsNullOrEmpty(uri.Query) &&
+               string.IsNullOrEmpty(uri.Fragment);
     }
 
     private static bool IsSafeEntityName(string? value, int maximumLength) =>
@@ -87,6 +128,6 @@ public static class MessagingRuntimeOptions
 
     private static InvalidOperationException InvalidAzureConfiguration() =>
         new(
-            "Messaging:AzureServiceBus requires a valid connection string, " +
-            "topic name, and result subscription name.");
+            "Messaging:AzureServiceBus requires exactly one valid connection string " +
+            "or fully qualified namespace, plus a topic and result subscription name.");
 }
