@@ -120,4 +120,29 @@ public sealed class AuditTamperingTests
         var verification = await auditChain.VerifyAsync(target.Id);
         Assert.True(verification.Valid);
     }
+
+    [Fact]
+    public async Task VerificationDetectsDeletedAuditTailAgainstStoredHead()
+    {
+        using var factory = new CaseLedgerFactory();
+        using var client = factory.CreateCookieClient();
+        await client.LoginAsync("admin@caseledger.dev", "Admin123!");
+        var cases = await client.GetFromJsonAsync<CaseCollectionResponse>("/api/cases?limit=100");
+        Assert.NotNull(cases);
+        var target = Assert.Single(cases.Items, item => item.Reference == "CL-2026-001");
+
+        await using (var tamperScope = factory.Services.CreateAsyncScope())
+        {
+            var db = tamperScope.ServiceProvider.GetRequiredService<CaseLedgerDbContext>();
+            await db.Database.ExecuteSqlInterpolatedAsync(
+                $"""DELETE FROM "AuditEvents" WHERE "CaseId" = {target.Id} AND "Sequence" = 2""");
+        }
+
+        var verification = await client.GetFromJsonAsync<AuditVerificationResponse>(
+            $"/api/cases/{target.Id:D}/audit/verify");
+        Assert.NotNull(verification);
+        Assert.False(verification.Valid);
+        Assert.Equal(1, verification.CheckedEvents);
+        Assert.Equal(2, verification.BrokenAt);
+    }
 }

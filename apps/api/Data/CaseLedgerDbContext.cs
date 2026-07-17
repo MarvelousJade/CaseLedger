@@ -10,6 +10,8 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
     public DbSet<CaseRecord> Cases => Set<CaseRecord>();
     public DbSet<Evidence> Evidence => Set<Evidence>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<AuditVerificationJob> AuditVerificationJobs => Set<AuditVerificationJob>();
+    public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -27,6 +29,12 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
         caseRecord.ToTable("Cases");
         caseRecord.HasKey(item => item.Id);
         caseRecord.Property(item => item.Version).IsConcurrencyToken();
+        caseRecord.Property(item => item.AuditHeadSequence).HasDefaultValue(0);
+        caseRecord.Property(item => item.AuditHeadHash)
+            .HasMaxLength(64)
+            .IsFixedLength()
+            .HasDefaultValue(CaseRecord.GenesisAuditHash)
+            .IsRequired();
         caseRecord.Property(item => item.Reference).HasMaxLength(32).IsRequired();
         caseRecord.Property(item => item.Title).HasMaxLength(160).IsRequired();
         caseRecord.Property(item => item.Summary).HasMaxLength(4000).IsRequired();
@@ -79,6 +87,45 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
             .WithMany()
             .HasForeignKey(item => item.ActorId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        var verificationJob = modelBuilder.Entity<AuditVerificationJob>();
+        verificationJob.ToTable("AuditVerificationJobs");
+        verificationJob.HasKey(item => item.Id);
+        verificationJob.Property(item => item.Status)
+            .HasConversion<string>()
+            .HasMaxLength(24)
+            .IsRequired();
+        verificationJob.Property(item => item.TargetHash)
+            .HasMaxLength(64)
+            .IsFixedLength()
+            .IsRequired();
+        verificationJob.Property(item => item.ResultId).HasMaxLength(100);
+        verificationJob.Property(item => item.ChainHead)
+            .HasMaxLength(64)
+            .IsFixedLength();
+        verificationJob.Property(item => item.SnapshotSha256)
+            .HasMaxLength(64)
+            .IsFixedLength()
+            .IsRequired();
+        verificationJob.Property(item => item.ErrorCode).HasMaxLength(80);
+        verificationJob.HasIndex(item => new { item.CaseId, item.RequestedAt });
+        verificationJob.HasIndex(item => new { item.Status, item.RequestedAt });
+        verificationJob.HasIndex(item => item.ResultId)
+            .IsUnique()
+            .HasFilter("\"ResultId\" IS NOT NULL");
+        verificationJob.HasOne(item => item.Case)
+            .WithMany()
+            .HasForeignKey(item => item.CaseId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var outboxMessage = modelBuilder.Entity<OutboxMessage>();
+        outboxMessage.ToTable("OutboxMessages");
+        outboxMessage.HasKey(item => item.Id);
+        outboxMessage.Property(item => item.MessageType).HasMaxLength(160).IsRequired();
+        outboxMessage.Property(item => item.PayloadJson).HasColumnType("TEXT").IsRequired();
+        outboxMessage.Property(item => item.LastErrorCode).HasMaxLength(80);
+        outboxMessage.HasIndex(
+            item => new { item.PublishedAt, item.DeadLetteredAt, item.NextAttemptAt });
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

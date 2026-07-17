@@ -4,6 +4,7 @@ using System.Threading.RateLimiting;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Endpoints;
 using CaseLedger.Api.GraphQL;
+using CaseLedger.Api.Messaging;
 using CaseLedger.Api.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http.Json;
@@ -79,6 +80,9 @@ builder.Services.AddDbContext<CaseLedgerDbContext>(options =>
 
 builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddScoped<AuditChainService>();
+builder.Services.Configure<MessagingOptions>(
+    builder.Configuration.GetSection(MessagingOptions.SectionName));
+builder.Services.AddScoped<AuditVerificationScheduler>();
 builder.Services.AddScoped<DatabaseSeeder>();
 
 builder.Services.AddRateLimiter(options =>

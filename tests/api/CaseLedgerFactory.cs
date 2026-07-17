@@ -11,9 +11,15 @@ namespace CaseLedger.Api.Tests;
 
 public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
 {
+    private readonly bool messagingEnabled;
     private readonly string databasePath = Path.Combine(
         Path.GetTempPath(),
         $"caseledger-tests-{Guid.NewGuid():N}.db");
+
+    public CaseLedgerFactory(bool messagingEnabled = false)
+    {
+        this.messagingEnabled = messagingEnabled;
+    }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -23,7 +29,8 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite",
-                ["ConnectionStrings:CaseLedger"] = $"Data Source={databasePath}"
+                ["ConnectionStrings:CaseLedger"] = $"Data Source={databasePath}",
+                ["Messaging:Enabled"] = messagingEnabled.ToString()
             });
         });
         builder.ConfigureServices(services =>

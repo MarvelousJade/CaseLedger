@@ -6,15 +6,17 @@ using System.Text.Json;
 using CaseLedger.Api.Contracts;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Domain;
+using CaseLedger.Api.Messaging;
 using Microsoft.EntityFrameworkCore;
 
 namespace CaseLedger.Api.Services;
 
 public sealed class AuditChainService(
     CaseLedgerDbContext db,
-    CaseLedgerTelemetry telemetry)
+    CaseLedgerTelemetry telemetry,
+    AuditVerificationScheduler verificationScheduler)
 {
-    public const string GenesisHash = "0000000000000000000000000000000000000000000000000000000000000000";
+    public const string GenesisHash = CaseRecord.GenesisAuditHash;
 
     private static readonly JsonSerializerOptions CanonicalJsonOptions = new()
     {
@@ -31,31 +33,10 @@ public sealed class AuditChainService(
         DateTime? createdAt = null,
         CancellationToken cancellationToken = default)
     {
-        var localPrevious = db.AuditEvents.Local
-            .Where(item => item.CaseId == caseId)
-            .OrderByDescending(item => item.Sequence)
-            .FirstOrDefault();
-
-        var persistedPrevious = await db.AuditEvents
-            .AsNoTracking()
-            .Where(item => item.CaseId == caseId)
-            .OrderByDescending(item => item.Sequence)
-            .Select(item => new PreviousAudit(item.Sequence, item.Hash))
-            .FirstOrDefaultAsync(cancellationToken);
-
-        var sequence = 1;
-        var previousHash = GenesisHash;
-        if (persistedPrevious is not null)
-        {
-            sequence = persistedPrevious.Sequence + 1;
-            previousHash = persistedPrevious.Hash;
-        }
-
-        if (localPrevious is not null && localPrevious.Sequence >= sequence)
-        {
-            sequence = localPrevious.Sequence + 1;
-            previousHash = localPrevious.Hash;
-        }
+        var caseRecord = db.Cases.Local.FirstOrDefault(item => item.Id == caseId) ??
+            await db.Cases.SingleAsync(item => item.Id == caseId, cancellationToken);
+        var sequence = caseRecord.AuditHeadSequence + 1;
+        var previousHash = caseRecord.AuditHeadHash;
 
         var id = eventId ?? Guid.NewGuid();
         var timestamp = NormalizeUtc(createdAt ?? DateTime.UtcNow);
@@ -73,6 +54,7 @@ public sealed class AuditChainService(
         {
             Id = id,
             CaseId = caseId,
+            Case = caseRecord,
             Sequence = sequence,
             EventType = eventType,
             Description = description,
@@ -86,6 +68,16 @@ public sealed class AuditChainService(
         };
 
         db.AuditEvents.Add(auditEvent);
+        caseRecord.AuditHeadSequence = auditEvent.Sequence;
+        caseRecord.AuditHeadHash = auditEvent.Hash;
+        if (string.Equals(eventType, "EvidenceAdded", StringComparison.Ordinal) &&
+            verificationScheduler.IsEnabled)
+        {
+            await verificationScheduler.ScheduleAsync(
+                caseId,
+                cancellationToken: cancellationToken);
+        }
+
         return auditEvent;
     }
 
@@ -122,6 +114,11 @@ public sealed class AuditChainService(
             return response;
         }
 
+        var expectedHead = await db.Cases
+            .AsNoTracking()
+            .Where(item => item.Id == caseId)
+            .Select(item => new AuditHead(item.AuditHeadSequence, item.AuditHeadHash))
+            .SingleAsync(cancellationToken);
         var events = await db.AuditEvents
             .AsNoTracking()
             .Where(item => item.CaseId == caseId)
@@ -153,6 +150,20 @@ public sealed class AuditChainService(
 
             previousHash = auditEvent.Hash;
             expectedSequence++;
+        }
+
+        var observedSequence = events.Count == 0 ? 0 : events[^1].Sequence;
+        var observedHash = events.Count == 0 ? GenesisHash : events[^1].Hash;
+        if (observedSequence != expectedHead.Sequence ||
+            !string.Equals(observedHash, expectedHead.Hash, StringComparison.Ordinal))
+        {
+            var brokenAt = observedSequence switch
+            {
+                var sequence when sequence < expectedHead.Sequence => sequence + 1,
+                var sequence when sequence > expectedHead.Sequence => expectedHead.Sequence + 1,
+                _ => Math.Max(1, expectedHead.Sequence)
+            };
+            return Complete(new AuditVerificationResponse(false, checkedEvents, brokenAt));
         }
 
         return Complete(new AuditVerificationResponse(true, checkedEvents));
@@ -257,5 +268,5 @@ public sealed class AuditChainService(
     private static string FormatUtc(DateTime value) =>
         NormalizeUtc(value).ToString("O", CultureInfo.InvariantCulture);
 
-    private sealed record PreviousAudit(int Sequence, string Hash);
+    private sealed record AuditHead(int Sequence, string Hash);
 }

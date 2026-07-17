@@ -15,6 +15,14 @@ public enum CaseSeverity
     Critical
 }
 
+public enum AuditVerificationJobStatus
+{
+    Queued,
+    Completed,
+    Failed,
+    DeadLettered
+}
+
 public sealed class User
 {
     public Guid Id { get; set; }
@@ -27,8 +35,13 @@ public sealed class User
 
 public sealed class CaseRecord
 {
+    public const string GenesisAuditHash =
+        "0000000000000000000000000000000000000000000000000000000000000000";
+
     public Guid Id { get; set; }
     public Guid Version { get; set; } = Guid.NewGuid();
+    public int AuditHeadSequence { get; set; }
+    public string AuditHeadHash { get; set; } = GenesisAuditHash;
     public string Reference { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Summary { get; set; } = string.Empty;
@@ -76,4 +89,38 @@ public sealed class AuditEvent
     public string PreviousHash { get; set; } = string.Empty;
     public string Hash { get; set; } = string.Empty;
     public string CanonicalData { get; set; } = string.Empty;
+}
+
+public sealed class AuditVerificationJob
+{
+    public Guid Id { get; set; }
+    public Guid CaseId { get; set; }
+    public CaseRecord Case { get; set; } = null!;
+    public AuditVerificationJobStatus Status { get; set; }
+    public int TargetSequence { get; set; }
+    public string TargetHash { get; set; } = string.Empty;
+    public string? ResultId { get; set; }
+    public bool? Valid { get; set; }
+    public int? CheckedEvents { get; set; }
+    public int? BrokenAt { get; set; }
+    public string? ChainHead { get; set; }
+    public string SnapshotSha256 { get; set; } = string.Empty;
+    public string? ErrorCode { get; set; }
+    public DateTime RequestedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+}
+
+public sealed class OutboxMessage
+{
+    public Guid Id { get; set; }
+    public string MessageType { get; set; } = string.Empty;
+    public string PayloadJson { get; set; } = string.Empty;
+    public DateTime OccurredAt { get; set; }
+    public DateTime? PublishedAt { get; set; }
+    public DateTime? DeadLetteredAt { get; set; }
+    public int AttemptCount { get; set; }
+    public DateTime NextAttemptAt { get; set; }
+    public Guid? LockId { get; set; }
+    public DateTime? LockedUntil { get; set; }
+    public string? LastErrorCode { get; set; }
 }

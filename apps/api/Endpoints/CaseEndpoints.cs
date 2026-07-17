@@ -4,6 +4,7 @@ using System.Text.Json;
 using CaseLedger.Api.Contracts;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Domain;
+using CaseLedger.Api.Messaging;
 using CaseLedger.Api.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -82,6 +83,28 @@ public static class CaseEndpoints
             .WithName("VerifyCaseAudit")
             .WithSummary("Verify a case's audit chain")
             .Produces<AuditVerificationResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapPost("/{id:guid}/audit/verifications", QueueAuditVerificationAsync)
+            .WithName("QueueCaseAuditVerification")
+            .WithSummary("Queue an immutable audit-chain verification snapshot")
+            .Produces<AuditVerificationJobResponse>(StatusCodes.Status202Accepted)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapGet("/{id:guid}/audit/verifications/latest", GetLatestAuditVerificationAsync)
+            .WithName("GetLatestCaseAuditVerification")
+            .WithSummary("Get the latest queued or completed audit verification")
+            .Produces<AuditVerificationJobResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapGet("/{id:guid}/audit/verifications/{jobId:guid}", GetAuditVerificationAsync)
+            .WithName("GetCaseAuditVerification")
+            .WithSummary("Get an audit verification job")
+            .Produces<AuditVerificationJobResponse>()
             .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
             .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status429TooManyRequests);
@@ -736,6 +759,103 @@ public static class CaseEndpoints
         return Results.Ok(await auditChain.VerifyAsync(id, cancellationToken));
     }
 
+    private static async Task<IResult> QueueAuditVerificationAsync(
+        Guid id,
+        HttpContext httpContext,
+        CaseLedgerDbContext db,
+        AuditVerificationScheduler scheduler,
+        CancellationToken cancellationToken)
+    {
+        var caseRecord = await db.Cases.SingleOrDefaultAsync(
+            item => item.Id == id,
+            cancellationToken);
+        if (caseRecord is null)
+        {
+            return CaseNotFound(id);
+        }
+
+        if (!scheduler.IsEnabled)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Verification messaging is unavailable");
+        }
+
+        var job = await scheduler.ScheduleAsync(
+            id,
+            httpContext.TraceIdentifier,
+            cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        var location = $"/api/cases/{id:D}/audit/verifications/{job.Id:D}";
+        return Results.Accepted(location, ToVerificationJobResponse(job, caseRecord));
+    }
+
+    private static async Task<IResult> GetAuditVerificationAsync(
+        Guid id,
+        Guid jobId,
+        CaseLedgerDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var caseHead = await db.Cases
+            .AsNoTracking()
+            .Where(item => item.Id == id)
+            .Select(item => new { item.AuditHeadSequence, item.AuditHeadHash })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (caseHead is null)
+        {
+            return CaseNotFound(id);
+        }
+
+        var job = await db.AuditVerificationJobs
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.Id == jobId && item.CaseId == id,
+                cancellationToken);
+        return job is null
+            ? Results.NotFound(new ProblemDetails
+            {
+                Status = StatusCodes.Status404NotFound,
+                Title = "Verification job not found"
+            })
+            : Results.Ok(ToVerificationJobResponse(
+                job,
+                caseHead.AuditHeadSequence,
+                caseHead.AuditHeadHash));
+    }
+
+    private static async Task<IResult> GetLatestAuditVerificationAsync(
+        Guid id,
+        CaseLedgerDbContext db,
+        CancellationToken cancellationToken)
+    {
+        var caseHead = await db.Cases
+            .AsNoTracking()
+            .Where(item => item.Id == id)
+            .Select(item => new { item.AuditHeadSequence, item.AuditHeadHash })
+            .SingleOrDefaultAsync(cancellationToken);
+        if (caseHead is null)
+        {
+            return CaseNotFound(id);
+        }
+
+        var job = await db.AuditVerificationJobs
+            .AsNoTracking()
+            .Where(item => item.CaseId == id)
+            .OrderByDescending(item => item.RequestedAt)
+            .ThenByDescending(item => item.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        return job is null
+            ? Results.NotFound(new ProblemDetails
+            {
+                Status = StatusCodes.Status404NotFound,
+                Title = "Verification job not found"
+            })
+            : Results.Ok(ToVerificationJobResponse(
+                job,
+                caseHead.AuditHeadSequence,
+                caseHead.AuditHeadHash));
+    }
+
     private static async Task<IResult> ExportAuditAsync(
         Guid id,
         HttpResponse httpResponse,
@@ -769,6 +889,35 @@ public static class CaseEndpoints
             DateTime.UtcNow,
             events));
     }
+
+    private static AuditVerificationJobResponse ToVerificationJobResponse(
+        AuditVerificationJob job,
+        CaseRecord caseRecord) =>
+        ToVerificationJobResponse(
+            job,
+            caseRecord.AuditHeadSequence,
+            caseRecord.AuditHeadHash);
+
+    private static AuditVerificationJobResponse ToVerificationJobResponse(
+        AuditVerificationJob job,
+        int currentSequence,
+        string currentHash) =>
+        new(
+            job.Id,
+            job.Status.ToString(),
+            job.TargetSequence,
+            job.TargetHash,
+            job.ResultId,
+            job.Valid,
+            job.CheckedEvents,
+            job.BrokenAt,
+            job.ChainHead,
+            job.SnapshotSha256,
+            job.ErrorCode,
+            job.RequestedAt,
+            job.CompletedAt,
+            job.TargetSequence == currentSequence &&
+            string.Equals(job.TargetHash, currentHash, StringComparison.Ordinal));
 
     private static Dictionary<string, string[]> ValidateCreate(CreateCaseRequest request)
     {

@@ -145,6 +145,22 @@ public sealed record AuditVerificationResponse(
     int CheckedEvents,
     int? BrokenAt = null);
 
+public sealed record AuditVerificationJobResponse(
+    Guid Id,
+    string Status,
+    int TargetSequence,
+    string TargetHash,
+    string? ResultId,
+    bool? Valid,
+    int? CheckedEvents,
+    int? BrokenAt,
+    string? ChainHead,
+    string SnapshotSha256,
+    string? ErrorCode,
+    DateTime RequestedAt,
+    DateTime? CompletedAt,
+    bool IsCurrent);
+
 public sealed record AuditExportResponse(
     Guid CaseId,
     string Reference,
