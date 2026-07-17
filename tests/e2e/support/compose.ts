@@ -24,12 +24,19 @@ export function runCompose(args: string[], quiet = false) {
     throw new Error(`E2E Compose file was not found at ${composeFile}. Run Playwright from the repository root.`)
   }
 
+  const environment = { ...process.env }
+  if (process.platform === 'win32' && existsSync(windowsDocker)) {
+    environment.PATH = [path.dirname(windowsDocker), environment.PATH]
+      .filter(Boolean)
+      .join(path.delimiter)
+  }
+
   const output = execFileSync(
     dockerExecutable(),
     ['compose', '--project-name', projectName, '--file', composeFile, ...args],
     {
       cwd: repositoryRoot,
-      env: process.env,
+      env: environment,
       encoding: 'utf8',
       stdio: quiet ? 'pipe' : 'inherit',
     },

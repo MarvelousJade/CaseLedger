@@ -15,6 +15,32 @@ services:
     volumes:
       - e2e-postgres-data:/var/lib/postgresql/data
 
+  rabbitmq:
+    image: rabbitmq:4.3.2-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: caseledger
+      RABBITMQ_DEFAULT_PASS: caseledger-e2e
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 2s
+      timeout: 5s
+      start_period: 20s
+      retries: 30
+    ports:
+      - "127.0.0.1:5673:5672"
+      - "127.0.0.1:15673:15672"
+    volumes:
+      - e2e-rabbitmq-data:/var/lib/rabbitmq
+
+  webhook-receiver:
+    build:
+      context: .
+      dockerfile: tools/webhook-receiver/Dockerfile
+    environment:
+      WEBHOOK_SIGNING_SECRET: caseledger-e2e-webhook-signing-secret
+    ports:
+      - "127.0.0.1:5154:8082"
+
   app:
     build:
       context: .
@@ -22,13 +48,41 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       Database__Provider: PostgreSQL
       ConnectionStrings__CaseLedger: Host=database;Port=5432;Database=caseledger;Username=caseledger;Password=caseledger-e2e
+      Messaging__Enabled: "true"
+      Messaging__Provider: RabbitMq
+      Messaging__RabbitMq__Uri: amqp://caseledger:caseledger-e2e@rabbitmq:5672/
+      Webhook__Enabled: "true"
+      Webhook__DestinationUrl: http://webhook-receiver:8082/webhooks/caseledger
+      Webhook__SigningSecret: caseledger-e2e-webhook-signing-secret
+      Webhook__AllowInsecureHttp: "true"
       Security__RequireSecureCookies: "false"
       Seed__AdminPassword: E2eAdmin123!
     depends_on:
       database:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      webhook-receiver:
+        condition: service_healthy
     ports:
       - "127.0.0.1:5151:8080"
 
+  audit-worker:
+    build:
+      context: .
+      dockerfile: apps/audit-worker/Dockerfile
+    environment:
+      BROKER_PROVIDER: rabbitmq
+      AMQP_URL: amqp://caseledger:caseledger-e2e@rabbitmq:5672/
+      AUDIT_WORKER_DATABASE_URL: postgresql://caseledger:caseledger-e2e@database:5432/caseledger
+      HEALTH_PORT: "8081"
+      OUTBOX_POLL_MILLISECONDS: "100"
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
 volumes:
   e2e-postgres-data:
+  e2e-rabbitmq-data:

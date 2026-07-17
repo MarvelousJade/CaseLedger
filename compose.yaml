@@ -15,6 +15,32 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
 
+  rabbitmq:
+    image: rabbitmq:4.3.2-management-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: caseledger
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-caseledger-local}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
+      retries: 20
+    ports:
+      - "127.0.0.1:5672:5672"
+      - "127.0.0.1:15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+
+  webhook-receiver:
+    build:
+      context: .
+      dockerfile: tools/webhook-receiver/Dockerfile
+    environment:
+      WEBHOOK_SIGNING_SECRET: ${WEBHOOK_SIGNING_SECRET:-caseledger-local-webhook-signing-secret}
+    ports:
+      - "127.0.0.1:5153:8082"
+
   app:
     build:
       context: .
@@ -22,13 +48,42 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       Database__Provider: PostgreSQL
       ConnectionStrings__CaseLedger: Host=database;Port=5432;Database=caseledger;Username=caseledger;Password=${POSTGRES_PASSWORD:-caseledger-local}
+      Messaging__Enabled: "true"
+      Messaging__Provider: RabbitMq
+      Messaging__RabbitMq__Uri: amqp://caseledger:${RABBITMQ_PASSWORD:-caseledger-local}@rabbitmq:5672/
+      Webhook__Enabled: "true"
+      Webhook__DestinationUrl: http://webhook-receiver:8082/webhooks/caseledger
+      Webhook__SigningSecret: ${WEBHOOK_SIGNING_SECRET:-caseledger-local-webhook-signing-secret}
+      Webhook__AllowInsecureHttp: "true"
       Security__RequireSecureCookies: "false"
       Seed__AdminPassword: ${CASELEDGER_ADMIN_PASSWORD:-Admin123!}
     depends_on:
       database:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      webhook-receiver:
+        condition: service_healthy
     ports:
       - "5150:8080"
 
+  audit-worker:
+    build:
+      context: .
+      dockerfile: apps/audit-worker/Dockerfile
+    environment:
+      BROKER_PROVIDER: rabbitmq
+      AMQP_URL: amqp://caseledger:${RABBITMQ_PASSWORD:-caseledger-local}@rabbitmq:5672/
+      AUDIT_WORKER_DATABASE_URL: postgresql://caseledger:${POSTGRES_PASSWORD:-caseledger-local}@database:5432/caseledger
+      HEALTH_PORT: "8081"
+    depends_on:
+      database:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:5152:8081"
+
 volumes:
   postgres-data:
+  rabbitmq-data:

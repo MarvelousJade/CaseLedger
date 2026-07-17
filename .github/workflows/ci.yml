@@ -30,11 +30,13 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             apps/web/package-lock.json
+            apps/audit-worker/package-lock.json
 
       - name: Install dependencies
         run: |
           npm ci
           npm ci --prefix apps/web
+          npm ci --prefix apps/audit-worker
 
       - name: Restore .NET projects
         run: dotnet restore CaseLedger.slnx

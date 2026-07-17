@@ -1,6 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { expect, test, type Page } from '@playwright/test'
-import { tamperWithFirstAuditEvent } from './support/database'
+import { waitForVerificationQueuesToDrain } from './support/broker'
+import {
+  apiOutboxAttemptCount,
+  replayApiVerificationRequest,
+  replayWorkerVerificationResult,
+  tamperWithFirstAuditEvent,
+  workerInboxCount,
+  workerResultPublishAttempts,
+} from './support/database'
+import { clearWebhookDeliveries, webhookDeliveries } from './support/webhook'
 
 const analystEmail = 'analyst@caseledger.dev'
 const analystPassword = 'Analyst123!'
@@ -83,7 +92,65 @@ test.describe.serial('case workflows', () => {
     tamperWithFirstAuditEvent(caseId)
 
     await caseDialog.getByRole('button', { name: 'Verify now' }).click()
-    await expect(caseDialog.getByText('Integrity break detected at 1')).toBeVisible()
-    await expect(page.getByRole('status')).toContainText('A break was detected in the activity chain.')
+    await expect(caseDialog.getByText('Integrity break detected at event 1')).toBeVisible()
+    await expect(
+      page.getByRole('status').filter({
+        hasText: 'A break was detected in the activity chain.',
+      }),
+    ).toBeVisible()
+  })
+
+  test('duplicate request and result deliveries remain idempotent', async ({ page }) => {
+    await signIn(page)
+    const title = `Idempotent verification ${randomUUID().slice(0, 8)}`
+    const { caseId, caseDialog } = await createCase(page, title)
+    await clearWebhookDeliveries()
+    const queuedResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url())
+      return response.request().method() === 'POST' &&
+        url.pathname === `/api/cases/${caseId}/audit/verifications`
+    })
+
+    await caseDialog.getByRole('button', { name: 'Verify now' }).click()
+    const response = await queuedResponse
+    expect(response.status()).toBe(202)
+    const queued = await response.json() as { id?: unknown }
+    const jobId = typeof queued.id === 'string' ? queued.id : ''
+    expect(jobId).toMatch(/^[0-9a-f-]{36}$/i)
+    await expect(caseDialog.getByText(/Verified · \d+ events checked/)).toBeVisible()
+    await expect.poll(async () => (await webhookDeliveries()).length).toBe(1)
+    await expect.poll(() => workerInboxCount(jobId)).toBe(1)
+    await expect.poll(() => apiOutboxAttemptCount(jobId)).toBeGreaterThanOrEqual(1)
+    await expect.poll(() => workerResultPublishAttempts(jobId)).toBeGreaterThanOrEqual(1)
+
+    replayApiVerificationRequest(jobId)
+    await expect.poll(() => apiOutboxAttemptCount(jobId)).toBeGreaterThanOrEqual(2)
+    await waitForVerificationQueuesToDrain()
+    expect(workerInboxCount(jobId)).toBe(1)
+
+    const originalResultAttempts = workerResultPublishAttempts(jobId)
+    replayWorkerVerificationResult(jobId)
+    await expect.poll(() => workerResultPublishAttempts(jobId))
+      .toBeGreaterThanOrEqual(originalResultAttempts + 1)
+    await waitForVerificationQueuesToDrain()
+
+    const stored = await page.evaluate(async ({ caseId, jobId }) => {
+      const result = await fetch(`/api/cases/${caseId}/audit/verifications/${jobId}`)
+      return { status: result.status, body: await result.json() }
+    }, { caseId, jobId })
+    expect(stored.status).toBe(200)
+    expect(stored.body).toMatchObject({
+      id: jobId,
+      status: 'Completed',
+      valid: true,
+      resultId: `audit-verification:${jobId}:v1`,
+    })
+    const deliveries = await webhookDeliveries()
+    expect(deliveries).toHaveLength(1)
+    expect(deliveries[0]).toMatchObject({
+      eventType: 'caseledger.audit.verification.completed.v1',
+    })
+    expect(deliveries[0]?.deliveryId).toMatch(/^[0-9a-f-]{36}$/i)
+    expect(deliveries[0]?.bodySha256).toMatch(/^[0-9a-f]{64}$/)
   })
 })

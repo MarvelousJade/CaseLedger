@@ -19,3 +19,7 @@ services:
         sync: false
       - key: Seed__AdminPassword
         generateValue: true
+      - key: Messaging__Enabled
+        value: "false"
+      - key: Webhook__Enabled
+        value: "false"

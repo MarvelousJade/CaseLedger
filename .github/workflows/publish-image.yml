@@ -1,4 +1,4 @@
-name: Publish container image
+name: Publish container images
 
 on:
   workflow_run:
@@ -35,24 +35,34 @@ jobs:
           persist-credentials: false
           ref: ${{ env.IMAGE_SHA }}
 
-      - name: Set image name
-        run: echo "IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/caseledger" >> "$GITHUB_ENV"
+      - name: Set image names
+        run: |
+          echo "API_IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/caseledger" >> "$GITHUB_ENV"
+          echo "WORKER_IMAGE_NAME=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/caseledger-audit-worker" >> "$GITHUB_ENV"
 
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io --username "${{ github.actor }}" --password-stdin
 
-      - name: Build container image
+      - name: Build container images
         run: |
           docker build \
             --label "org.opencontainers.image.revision=$IMAGE_SHA" \
-            --tag "$IMAGE_NAME:$IMAGE_SHA" \
-            --tag "$IMAGE_NAME:latest" \
+            --tag "$API_IMAGE_NAME:$IMAGE_SHA" \
+            --tag "$API_IMAGE_NAME:latest" \
+            .
+          docker build \
+            --file apps/audit-worker/Dockerfile \
+            --label "org.opencontainers.image.revision=$IMAGE_SHA" \
+            --tag "$WORKER_IMAGE_NAME:$IMAGE_SHA" \
+            --tag "$WORKER_IMAGE_NAME:latest" \
             .
 
-      - name: Push container image
+      - name: Push container images
         run: |
-          docker push "$IMAGE_NAME:$IMAGE_SHA"
-          docker push "$IMAGE_NAME:latest"
+          docker push "$API_IMAGE_NAME:$IMAGE_SHA"
+          docker push "$API_IMAGE_NAME:latest"
+          docker push "$WORKER_IMAGE_NAME:$IMAGE_SHA"
+          docker push "$WORKER_IMAGE_NAME:latest"
 
       - name: Log out of GitHub Container Registry
         if: always()
