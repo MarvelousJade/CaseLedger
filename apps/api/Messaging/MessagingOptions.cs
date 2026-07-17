@@ -12,6 +12,7 @@ public sealed class MessagingOptions
     public int BatchSize { get; init; } = 20;
     public int LeaseSeconds { get; init; } = 30;
     public int MaxAttempts { get; init; } = 8;
+    public int MaximumMessageBytes { get; init; } = 196_608;
 }
 
 public sealed class RabbitMqOptions

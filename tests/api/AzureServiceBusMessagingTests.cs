@@ -79,6 +79,26 @@ public sealed class AzureServiceBusMessagingTests
     }
 
     [Fact]
+    public void ProviderValidationRejectsUnsafeMessageLimit()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => MessagingRuntimeOptions.Validate(
+                new MessagingOptions
+                {
+                    Provider = "AzureServiceBus",
+                    MaximumMessageBytes = 16_383,
+                    AzureServiceBus = new AzureServiceBusOptions
+                    {
+                        ConnectionString = ConnectionString,
+                        TopicName = "caseledger-audit",
+                        ResultSubscriptionName = "api-results-v1"
+                    }
+                }));
+
+        Assert.Contains("MaximumMessageBytes", exception.Message);
+    }
+
+    [Fact]
     public void InvalidAzureConfigurationNeverEchoesConnectionString()
     {
         const string sensitiveValue = "DO_NOT_LEAK_CONNECTION_SECRET";

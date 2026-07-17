@@ -10,6 +10,7 @@ using CaseLedger.Api.Domain;
 using CaseLedger.Api.Messaging;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 
 namespace CaseLedger.Api.Tests;
 
@@ -253,6 +254,32 @@ public sealed class AuditVerificationJobTests
         Assert.Equal(
             "0b341c88308bd99a76b00352fe951a615330212a8a4f2f1061aaadd14ba68a90",
             AuditVerificationScheduler.ComputeSnapshotSha256(events));
+    }
+
+    [Fact]
+    public async Task OversizedSnapshotIsRejectedBeforeDurableRowsAreStaged()
+    {
+        using var factory = new CaseLedgerFactory();
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CaseLedgerDbContext>();
+        var target = await db.Cases
+            .AsNoTracking()
+            .SingleAsync(item => item.Reference == "CL-2026-001");
+        var scheduler = new AuditVerificationScheduler(
+            db,
+            Options.Create(new MessagingOptions
+            {
+                Enabled = true,
+                MaximumMessageBytes = 128
+            }));
+
+        var exception = await Assert.ThrowsAsync<AuditVerificationMessageTooLargeException>(
+            () => scheduler.ScheduleAsync(target.Id, "size-test"));
+
+        Assert.Equal(128, exception.MaximumBytes);
+        Assert.True(exception.ActualBytes > exception.MaximumBytes);
+        Assert.Empty(db.ChangeTracker.Entries<AuditVerificationJob>());
+        Assert.Empty(db.ChangeTracker.Entries<OutboxMessage>());
     }
 
     private static async Task<CaseListItemResponse> FindCaseAsync(

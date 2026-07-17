@@ -12,6 +12,12 @@ public static class MessagingRuntimeOptions
 {
     public static MessagingProviderKind Validate(MessagingOptions options)
     {
+        if (options.MaximumMessageBytes is < 16_384 or > 1_048_576)
+        {
+            throw new InvalidOperationException(
+                "Messaging:MaximumMessageBytes must be between 16384 and 1048576.");
+        }
+
         if (string.Equals(
                 options.Provider,
                 "RabbitMq",

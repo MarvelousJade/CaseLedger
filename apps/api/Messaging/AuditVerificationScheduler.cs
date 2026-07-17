@@ -94,11 +94,20 @@ public sealed class AuditVerificationScheduler(
                 job.TargetSequence,
                 job.TargetHash,
                 snapshot));
+        var payloadJson = JsonSerializer.Serialize(request, JsonOptions);
+        var payloadBytes = Encoding.UTF8.GetByteCount(payloadJson);
+        if (payloadBytes > options.Value.MaximumMessageBytes)
+        {
+            throw new AuditVerificationMessageTooLargeException(
+                options.Value.MaximumMessageBytes,
+                payloadBytes);
+        }
+
         var outboxMessage = new OutboxMessage
         {
             Id = jobId,
             MessageType = RequestMessageType,
-            PayloadJson = JsonSerializer.Serialize(request, JsonOptions),
+            PayloadJson = payloadJson,
             OccurredAt = requestedAt,
             NextAttemptAt = requestedAt
         };

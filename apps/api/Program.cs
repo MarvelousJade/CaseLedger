@@ -19,6 +19,7 @@ using Npgsql;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddCaseLedgerObservability();
 
+builder.Services.AddExceptionHandler<AuditVerificationMessageTooLargeExceptionHandler>();
 builder.Services.AddProblemDetails(options =>
 {
     options.CustomizeProblemDetails = context =>
