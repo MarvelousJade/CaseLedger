@@ -1,12 +1,12 @@
 import type { ChangeEvent, FormEvent } from 'react'
 import { Icon, type IconName } from '../Icons'
-import type { CaseItem, IntegrityResult } from '../types'
+import type { AuditVerificationJob, CaseItem, IntegrityResult } from '../types'
 import { formatBytes, formatDate, formatRelative, initials, titleCase } from '../utils'
 import { EmptyState } from './Common'
 
 const statuses = ['New', 'InProgress', 'Resolved']
 
-export function OverviewSection({ item, status, setStatus, saveStatus, savingStatus, verify, verifying, integrity }: {
+export function OverviewSection({ item, status, setStatus, saveStatus, savingStatus, verify, verifying, integrity, verificationJob }: {
   item: CaseItem
   status: string
   setStatus: (value: string) => void
@@ -15,6 +15,7 @@ export function OverviewSection({ item, status, setStatus, saveStatus, savingSta
   verify: () => void
   verifying: boolean
   integrity: IntegrityResult | null
+  verificationJob: AuditVerificationJob | null
 }) {
   return (
     <div className="detail-section-stack">
@@ -39,9 +40,74 @@ export function OverviewSection({ item, status, setStatus, saveStatus, savingSta
       <section className="verify-card">
         <span className="verify-card__icon"><Icon name="fingerprint" size={24} /></span>
         <div><h3>Verify activity chain</h3><p>Recalculate every event hash and confirm this record has not been altered.</p></div>
-        <button className="button button--dark" onClick={verify} disabled={verifying}>{verifying ? <><span className="button-spinner" /> Verifying…</> : 'Verify now'}</button>
-        {integrity && <div className={`verify-result ${integrity.valid ? 'verify-result--valid' : 'verify-result--invalid'}`}><Icon name={integrity.valid ? 'check' : 'warning'} size={17} /><span>{integrity.valid ? `Verified · ${integrity.checkedEvents} events checked` : `Integrity break detected${integrity.brokenAt ? ` at ${integrity.brokenAt}` : ''}`}</span></div>}
+        <button className="button button--dark" onClick={verify} disabled={verifying}>{verifying ? <><span className="button-spinner" /> Verifying…</> : verificationJob && !verificationJob.isCurrent ? 'Verify again' : 'Verify now'}</button>
+        <VerificationStatus job={verificationJob} integrity={integrity} />
       </section>
+    </div>
+  )
+}
+
+function VerificationStatus({ job, integrity }: {
+  job: AuditVerificationJob | null
+  integrity: IntegrityResult | null
+}) {
+  if (!job) {
+    if (!integrity) return null
+    return (
+      <div
+        className={`verify-result ${integrity.valid ? 'verify-result--valid' : 'verify-result--invalid'}`}
+        role="status"
+        aria-live="polite"
+      >
+        <Icon name={integrity.valid ? 'check' : 'warning'} size={17} />
+        <span>{integrity.valid
+          ? `Verified · ${integrity.checkedEvents} events checked`
+          : `Integrity break detected${integrity.brokenAt ? ` at ${integrity.brokenAt}` : ''}`}</span>
+      </div>
+    )
+  }
+
+  const status = job.status.toLowerCase()
+  if (status === 'queued' || status === 'processing') {
+    return (
+      <div className="verify-result verify-result--pending" role="status" aria-live="polite">
+        <span className="button-spinner" />
+        <span>Verification queued · {job.targetSequence} events in snapshot</span>
+      </div>
+    )
+  }
+
+  if (status === 'completed' && job.valid === true && !job.isCurrent) {
+    return (
+      <div className="verify-result verify-result--stale" role="status" aria-live="polite">
+        <Icon name="warning" size={17} />
+        <span>Verified snapshot is outdated · Run again for the current chain</span>
+      </div>
+    )
+  }
+
+  if (status === 'completed' && job.valid === true) {
+    return (
+      <div className="verify-result verify-result--valid" role="status" aria-live="polite">
+        <Icon name="check" size={17} />
+        <span>Verified · {job.checkedEvents ?? job.targetSequence} events checked</span>
+      </div>
+    )
+  }
+
+  if (status === 'completed' && job.valid === false) {
+    return (
+      <div className="verify-result verify-result--invalid" role="status" aria-live="assertive">
+        <Icon name="warning" size={17} />
+        <span>Integrity break detected{job.brokenAt ? ` at event ${job.brokenAt}` : ''}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="verify-result verify-result--invalid" role="status" aria-live="assertive">
+      <Icon name="warning" size={17} />
+      <span>Verification could not finish · Retry to start a fresh verification</span>
     </div>
   )
 }
@@ -105,4 +171,3 @@ export function EvidenceSection({ item, addEvidence, uploading, uploadMessage }:
 function DetailFact({ icon, label, value }: { icon: IconName; label: string; value: string }) {
   return <div className="detail-fact"><span><Icon name={icon} size={17} /></span><div><small>{label}</small><b>{value}</b></div></div>
 }
-

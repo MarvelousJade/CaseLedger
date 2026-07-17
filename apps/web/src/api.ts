@@ -1,5 +1,6 @@
 import type {
   Activity,
+  AuditVerificationJob,
   CaseCollection,
   CaseItem,
   CreateCaseInput,
@@ -126,6 +127,35 @@ function normaliseActivity(value: unknown): Activity {
       readString(record, ['actorName', 'createdByName', 'authorName']) ||
       readString(actor, ['name', 'displayName'], 'System'),
     createdAt: readDate(record, ['createdAt', 'occurredAt', 'timestamp']),
+  }
+}
+
+function normaliseAuditVerificationJob(value: unknown): AuditVerificationJob {
+  const wrapper = asRecord(value)
+  const record = asRecord(wrapper.job ?? wrapper.data ?? value)
+  const valid = record.valid
+  const checkedEvents = record.checkedEvents
+  const brokenAt = record.brokenAt
+
+  return {
+    id: readString(record, ['id', 'jobId']),
+    status: readString(record, ['status'], 'Queued'),
+    targetSequence: readNumber(record, ['targetSequence']),
+    targetHash: readString(record, ['targetHash']),
+    resultId: readString(record, ['resultId']) || undefined,
+    valid: typeof valid === 'boolean' ? valid : undefined,
+    checkedEvents: checkedEvents === null || checkedEvents === undefined
+      ? undefined
+      : readNumber(record, ['checkedEvents']),
+    brokenAt: brokenAt === null || brokenAt === undefined
+      ? undefined
+      : readNumber(record, ['brokenAt']),
+    chainHead: readString(record, ['chainHead']) || undefined,
+    snapshotSha256: readString(record, ['snapshotSha256']),
+    errorCode: readString(record, ['errorCode']) || undefined,
+    requestedAt: readDate(record, ['requestedAt']),
+    completedAt: readString(record, ['completedAt']) || undefined,
+    isCurrent: readBoolean(record, ['isCurrent']),
   }
 }
 
@@ -285,6 +315,28 @@ export const api = {
     }
   },
 
+  async queueAuditVerification(id: string) {
+    return normaliseAuditVerificationJob(
+      await request<unknown>(`/api/cases/${encodeURIComponent(id)}/audit/verifications`, {
+        method: 'POST',
+      }),
+    )
+  },
+
+  async getAuditVerification(id: string, jobId: string) {
+    return normaliseAuditVerificationJob(
+      await request<unknown>(
+        `/api/cases/${encodeURIComponent(id)}/audit/verifications/${encodeURIComponent(jobId)}`,
+      ),
+    )
+  },
+
+  async getLatestAuditVerification(id: string) {
+    return normaliseAuditVerificationJob(
+      await request<unknown>(`/api/cases/${encodeURIComponent(id)}/audit/verifications/latest`),
+    )
+  },
+
   async getDashboard(): Promise<DashboardData> {
     const dashboardQuery = `
       query CaseLedgerDashboard {
@@ -341,6 +393,14 @@ export function isUnauthorised(error: unknown) {
 
 export function isPreconditionFailed(error: unknown) {
   return typeof error === 'object' && error !== null && 'status' in error && error.status === 412
+}
+
+export function isNotFound(error: unknown) {
+  return error instanceof ApiError && error.status === 404
+}
+
+export function isServiceUnavailable(error: unknown) {
+  return typeof error === 'object' && error !== null && 'status' in error && error.status === 503
 }
 
 export function getErrorMessage(error: unknown, fallback = 'Something went wrong. Please try again.') {

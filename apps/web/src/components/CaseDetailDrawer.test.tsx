@@ -1,9 +1,14 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '../api'
-import type { CaseItem } from '../types'
+import { subscribeToCaseUpdates } from '../realtime'
+import type { AuditVerificationJob, CaseItem, VerificationUpdated } from '../types'
 import { CaseDetailDrawer } from './CaseDetailDrawer'
+
+vi.mock('../realtime', () => ({
+  subscribeToCaseUpdates: vi.fn(),
+}))
 
 const currentCase: CaseItem = {
   id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -21,6 +26,27 @@ const currentCase: CaseItem = {
   evidence: [],
   activity: [],
 }
+
+const queuedJob: AuditVerificationJob = {
+  id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+  status: 'Queued',
+  targetSequence: 4,
+  targetHash: 'a'.repeat(64),
+  snapshotSha256: 'b'.repeat(64),
+  requestedAt: '2026-07-17T02:00:00.000Z',
+  isCurrent: true,
+}
+
+let realtimeHandler: ((update: VerificationUpdated) => void) | undefined
+
+beforeEach(() => {
+  realtimeHandler = undefined
+  vi.mocked(subscribeToCaseUpdates).mockImplementation(async (_caseId, handler) => {
+    realtimeHandler = handler
+    return async () => undefined
+  })
+  vi.spyOn(api, 'getLatestAuditVerification').mockRejectedValue(new Error('No verification yet'))
+})
 
 function renderDrawer() {
   const props = { caseId: currentCase.id, onClose: vi.fn(), onMutate: vi.fn(), notify: vi.fn() }
@@ -70,5 +96,112 @@ describe('CaseDetailDrawer status updates', () => {
     await waitFor(() => expect(notify).toHaveBeenCalledWith('Connection lost', 'danger'))
     expect(getCase).toHaveBeenCalledOnce()
     expect(onMutate).not.toHaveBeenCalled()
+  })
+})
+
+describe('CaseDetailDrawer audit verification', () => {
+  it('queues a verification and applies its realtime result', async () => {
+    const browser = userEvent.setup()
+    const completedJob: AuditVerificationJob = {
+      ...queuedJob,
+      status: 'Completed',
+      resultId: `audit-verification:${queuedJob.id}:v1`,
+      valid: true,
+      checkedEvents: 4,
+      chainHead: queuedJob.targetHash,
+      completedAt: '2026-07-17T02:00:01.000Z',
+    }
+    vi.spyOn(api, 'getCase').mockResolvedValue(currentCase)
+    vi.spyOn(api, 'queueAuditVerification').mockResolvedValue(queuedJob)
+    const getVerification = vi.spyOn(api, 'getAuditVerification').mockResolvedValue(completedJob)
+    const { notify } = renderDrawer()
+
+    await browser.click(await screen.findByRole('button', { name: 'Verify now' }))
+
+    expect(await screen.findByText('Verification queued · 4 events in snapshot')).toBeVisible()
+    expect(api.queueAuditVerification).toHaveBeenCalledWith(currentCase.id)
+    expect(subscribeToCaseUpdates).toHaveBeenCalledWith(currentCase.id, expect.any(Function))
+
+    act(() => {
+      realtimeHandler?.({
+        jobId: queuedJob.id,
+        caseId: currentCase.id,
+        resultId: completedJob.resultId!,
+        status: 'Completed',
+        valid: true,
+        checkedEvents: 4,
+        completedAt: completedJob.completedAt,
+      })
+    })
+
+    expect(await screen.findByText('Verified · 4 events checked')).toBeVisible()
+    expect(getVerification).toHaveBeenCalledWith(currentCase.id, queuedJob.id)
+    expect(notify).toHaveBeenCalledWith('Integrity verified across 4 events.', 'success')
+  })
+
+  it('shows when the latest successful verification is stale', async () => {
+    vi.spyOn(api, 'getCase').mockResolvedValue(currentCase)
+    vi.mocked(api.getLatestAuditVerification).mockResolvedValue({
+      ...queuedJob,
+      status: 'Completed',
+      valid: true,
+      checkedEvents: 4,
+      completedAt: '2026-07-17T02:00:01.000Z',
+      isCurrent: false,
+    })
+
+    renderDrawer()
+
+    expect(await screen.findByText('Verified snapshot is outdated · Run again for the current chain')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Verify again' })).toBeEnabled()
+  })
+
+  it('falls back to synchronous verification when messaging is unavailable', async () => {
+    const browser = userEvent.setup()
+    vi.spyOn(api, 'getCase').mockResolvedValue(currentCase)
+    vi.spyOn(api, 'queueAuditVerification').mockRejectedValue(
+      Object.assign(new Error('Verification messaging is unavailable'), { status: 503 }),
+    )
+    const verifyAudit = vi.spyOn(api, 'verifyAudit').mockResolvedValue({ valid: true, checkedEvents: 4 })
+    const { notify } = renderDrawer()
+
+    await browser.click(await screen.findByRole('button', { name: 'Verify now' }))
+
+    expect(await screen.findByText('Verified · 4 events checked')).toBeVisible()
+    expect(verifyAudit).toHaveBeenCalledWith(currentCase.id)
+    expect(notify).toHaveBeenCalledWith('Integrity verified across 4 events.', 'success')
+  })
+
+  it('clears the previous verification when switching to a case with no result', async () => {
+    const secondCase = {
+      ...currentCase,
+      id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      reference: 'CL-2026-0043',
+      title: 'Second investigation',
+    }
+    vi.spyOn(api, 'getCase')
+      .mockResolvedValueOnce(currentCase)
+      .mockResolvedValueOnce(secondCase)
+    vi.mocked(api.getLatestAuditVerification)
+      .mockResolvedValueOnce({
+        ...queuedJob,
+        status: 'Completed',
+        valid: true,
+        checkedEvents: 4,
+        completedAt: '2026-07-17T02:00:01.000Z',
+      })
+      .mockRejectedValueOnce(Object.assign(new Error('Verification job not found'), { status: 404 }))
+    const props = { onClose: vi.fn(), onMutate: vi.fn(), notify: vi.fn() }
+    const { rerender } = render(<CaseDetailDrawer caseId={currentCase.id} {...props} />)
+
+    expect(await screen.findByText('Verified · 4 events checked')).toBeVisible()
+
+    rerender(<CaseDetailDrawer caseId={secondCase.id} {...props} />)
+
+    expect(await screen.findByRole('heading', { name: secondCase.title })).toBeVisible()
+    await waitFor(() => {
+      expect(screen.queryByText('Verified · 4 events checked')).not.toBeInTheDocument()
+      expect(screen.queryByText(/Verification queued/)).not.toBeInTheDocument()
+    })
   })
 })

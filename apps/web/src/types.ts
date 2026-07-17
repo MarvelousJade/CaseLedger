@@ -72,6 +72,34 @@ export interface IntegrityResult {
   brokenAt?: string
 }
 
+export interface AuditVerificationJob {
+  id: string
+  status: string
+  targetSequence: number
+  targetHash: string
+  resultId?: string
+  valid?: boolean
+  checkedEvents?: number
+  brokenAt?: number
+  chainHead?: string
+  snapshotSha256: string
+  errorCode?: string
+  requestedAt: string
+  completedAt?: string
+  isCurrent: boolean
+}
+
+export interface VerificationUpdated {
+  jobId: string
+  caseId: string
+  resultId: string
+  status: string
+  valid?: boolean
+  checkedEvents?: number
+  brokenAt?: number
+  completedAt?: string
+}
+
 export interface CreateCaseInput {
   title: string
   summary: string

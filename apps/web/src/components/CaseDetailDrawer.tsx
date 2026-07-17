@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
-import { api, getErrorMessage, isPreconditionFailed } from '../api'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react'
+import { api, getErrorMessage, isNotFound, isPreconditionFailed, isServiceUnavailable } from '../api'
 import { Icon } from '../Icons'
-import type { CaseItem, IntegrityResult } from '../types'
+import { subscribeToCaseUpdates } from '../realtime'
+import type { AuditVerificationJob, CaseItem, IntegrityResult } from '../types'
 import { formatRelative, titleCase } from '../utils'
 import { ErrorState, SeverityBadge, StatusBadge } from './Common'
 import { ActivitySection, EvidenceSection, OverviewSection } from './CaseDetailSections'
@@ -27,9 +28,13 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
   const [uploading, setUploading] = useState(false)
   const [uploadMessage, setUploadMessage] = useState('')
   const [integrity, setIntegrity] = useState<IntegrityResult | null>(null)
+  const [verificationJob, setVerificationJob] = useState<AuditVerificationJob | null>(null)
   const [verifying, setVerifying] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const closeButton = useRef<HTMLButtonElement>(null)
+  const announcedResult = useRef('')
+  const notifyRef = useRef(notify)
+  notifyRef.current = notify
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose() }
@@ -56,6 +61,79 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
       .finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [caseId, reloadKey])
+
+  const storeVerificationJob = useCallback((job: AuditVerificationJob, announce = false) => {
+    setVerificationJob(job)
+    if (!announce || !isTerminalVerification(job)) return
+
+    const resultKey = job.resultId || `${job.id}:${job.status}:${job.completedAt ?? ''}`
+    if (announcedResult.current === resultKey) return
+    announcedResult.current = resultKey
+
+    if (job.status.toLowerCase() === 'completed' && job.valid === true) {
+      notifyRef.current(
+        job.isCurrent
+          ? `Integrity verified across ${job.checkedEvents ?? job.targetSequence} events.`
+          : 'The verified snapshot is valid, but the case has changed since it was queued.',
+        job.isCurrent ? 'success' : 'danger',
+      )
+    } else if (job.status.toLowerCase() === 'completed' && job.valid === false) {
+      notifyRef.current('A break was detected in the activity chain.', 'danger')
+    } else {
+      notifyRef.current('Verification could not finish. Start a fresh verification to retry.', 'danger')
+    }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    announcedResult.current = ''
+    setVerificationJob(null)
+    setIntegrity(null)
+    api.getLatestAuditVerification(caseId)
+      .then((job) => { if (active) storeVerificationJob(job) })
+      .catch((requestError) => {
+        if (active && !isNotFound(requestError)) setVerificationJob(null)
+      })
+    return () => { active = false }
+  }, [caseId, reloadKey, storeVerificationJob])
+
+  useEffect(() => {
+    let active = true
+    let unsubscribe: (() => Promise<void>) | undefined
+
+    subscribeToCaseUpdates(caseId, (update) => {
+      if (!active || update.caseId.toLowerCase() !== caseId.toLowerCase()) return
+      void api.getAuditVerification(caseId, update.jobId)
+        .then((job) => { if (active) storeVerificationJob(job, true) })
+        .catch(() => undefined)
+    })
+      .then((stop) => {
+        if (!active) void stop()
+        else unsubscribe = stop
+      })
+      .catch(() => undefined)
+
+    return () => {
+      active = false
+      if (unsubscribe) void unsubscribe()
+    }
+  }, [caseId, storeVerificationJob])
+
+  useEffect(() => {
+    if (!verificationJob || !isPendingVerification(verificationJob)) return
+    let active = true
+    const poll = window.setInterval(() => {
+      void api.getAuditVerification(caseId, verificationJob.id)
+        .then((job) => {
+          if (active) storeVerificationJob(job, true)
+        })
+        .catch(() => undefined)
+    }, 2_000)
+    return () => {
+      active = false
+      window.clearInterval(poll)
+    }
+  }, [caseId, storeVerificationJob, verificationJob])
 
   const reload = () => {
     setReloadKey((key) => key + 1)
@@ -132,12 +210,23 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
     setVerifying(true)
     setIntegrity(null)
     try {
-      const result = await api.verifyAudit(item.id)
-      setIntegrity(result)
-      notify(
-        result.valid ? `Integrity verified across ${result.checkedEvents} events.` : 'A break was detected in the activity chain.',
-        result.valid ? 'success' : 'danger',
-      )
+      try {
+        const job = await api.queueAuditVerification(item.id)
+        storeVerificationJob(job, isTerminalVerification(job))
+        if (isPendingVerification(job)) {
+          notify('Verification queued. Results will update here automatically.')
+        }
+      } catch (requestError) {
+        if (!isServiceUnavailable(requestError)) throw requestError
+
+        const result = await api.verifyAudit(item.id)
+        setVerificationJob(null)
+        setIntegrity(result)
+        notify(
+          result.valid ? `Integrity verified across ${result.checkedEvents} events.` : 'A break was detected in the activity chain.',
+          result.valid ? 'success' : 'danger',
+        )
+      }
     } catch (requestError) {
       notify(getErrorMessage(requestError, 'Verification could not be completed.'), 'danger')
     } finally {
@@ -163,7 +252,7 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
             ] as { id: DetailTab; label: string }[]).map((entry) => <button role="tab" aria-selected={tab === entry.id} className={tab === entry.id ? 'active' : ''} onClick={() => setTab(entry.id)} key={entry.id}>{entry.label}</button>)}
           </div>
           <div className="drawer-content">
-            {tab === 'overview' && <OverviewSection item={item} status={status} setStatus={setStatus} saveStatus={saveStatus} savingStatus={savingStatus} verify={verify} verifying={verifying} integrity={integrity} />}
+            {tab === 'overview' && <OverviewSection item={item} status={status} setStatus={setStatus} saveStatus={saveStatus} savingStatus={savingStatus} verify={verify} verifying={verifying || isPendingVerification(verificationJob)} integrity={integrity} verificationJob={verificationJob} />}
             {tab === 'activity' && <ActivitySection item={item} comment={comment} setComment={setComment} addComment={addComment} commenting={commenting} />}
             {tab === 'evidence' && <EvidenceSection item={item} addEvidence={addEvidence} uploading={uploading} uploadMessage={uploadMessage} />}
           </div>
@@ -171,6 +260,16 @@ export function CaseDetailDrawer({ caseId, onClose, onMutate, notify }: CaseDeta
       </aside>
     </div>
   )
+}
+
+function isPendingVerification(job: AuditVerificationJob | null) {
+  if (!job) return false
+  const status = job.status.toLowerCase()
+  return status === 'queued' || status === 'processing'
+}
+
+function isTerminalVerification(job: AuditVerificationJob) {
+  return !isPendingVerification(job)
 }
 
 function DetailSkeleton() {

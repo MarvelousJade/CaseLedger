@@ -81,4 +81,62 @@ describe('case API contract', () => {
     expect(headers.get('Content-Type')).toBe('application/json')
     expect(result.version).toBe(nextVersion)
   })
+
+  it('queues and reads durable audit verification jobs', async () => {
+    const requestedAt = '2026-07-17T02:00:00.000Z'
+    const completedAt = '2026-07-17T02:00:01.000Z'
+    const jobId = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({
+        id: jobId,
+        status: 'Queued',
+        targetSequence: 4,
+        targetHash: 'a'.repeat(64),
+        snapshotSha256: 'b'.repeat(64),
+        requestedAt,
+        isCurrent: true,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: jobId,
+        status: 'Completed',
+        targetSequence: 4,
+        targetHash: 'a'.repeat(64),
+        resultId: `audit-verification:${jobId}:v1`,
+        valid: true,
+        checkedEvents: 4,
+        brokenAt: null,
+        chainHead: 'a'.repeat(64),
+        snapshotSha256: 'b'.repeat(64),
+        errorCode: null,
+        requestedAt,
+        completedAt,
+        isCurrent: true,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: jobId,
+        status: 'Completed',
+        targetSequence: 4,
+        targetHash: 'a'.repeat(64),
+        valid: true,
+        checkedEvents: 4,
+        snapshotSha256: 'b'.repeat(64),
+        requestedAt,
+        completedAt,
+        isCurrent: false,
+      }))
+
+    const queued = await api.queueAuditVerification(caseId)
+    const completed = await api.getAuditVerification(caseId, jobId)
+    const latest = await api.getLatestAuditVerification(caseId)
+
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      `/api/cases/${caseId}/audit/verifications`,
+      `/api/cases/${caseId}/audit/verifications/${jobId}`,
+      `/api/cases/${caseId}/audit/verifications/latest`,
+    ])
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: 'POST', credentials: 'include' })
+    expect(queued).toMatchObject({ id: jobId, status: 'Queued', isCurrent: true })
+    expect(completed).toMatchObject({ valid: true, checkedEvents: 4, brokenAt: undefined })
+    expect(latest.isCurrent).toBe(false)
+  })
 })
