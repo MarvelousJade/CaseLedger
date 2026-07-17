@@ -5,6 +5,7 @@ using CaseLedger.Api.Domain;
 using CaseLedger.Api.Services;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace CaseLedger.Api.Endpoints;
@@ -14,21 +15,44 @@ public static class ApiEndpoints
     public static IEndpointRouteBuilder MapCaseLedgerApi(this IEndpointRouteBuilder endpoints)
     {
         var api = endpoints.MapGroup("/api");
-        var auth = api.MapGroup("/auth");
+        var auth = api.MapGroup("/auth")
+            .WithTags("Authentication");
 
         auth.MapPost("/login", LoginAsync)
             .AllowAnonymous()
-            .RequireRateLimiting("login");
+            .RequireRateLimiting("login")
+            .WithName("Login")
+            .WithSummary("Create an authenticated session")
+            .Produces<UserResponse>()
+            .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
         auth.MapGet("/me", MeAsync)
             .RequireAuthorization()
-            .RequireRateLimiting("authenticated");
+            .RequireRateLimiting("authenticated")
+            .WithName("GetCurrentUser")
+            .WithSummary("Get the authenticated user")
+            .Produces<UserResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
         auth.MapPost("/logout", LogoutAsync)
             .RequireAuthorization()
-            .RequireRateLimiting("authenticated");
+            .RequireRateLimiting("authenticated")
+            .WithName("Logout")
+            .WithSummary("End the authenticated session")
+            .Produces(StatusCodes.Status204NoContent)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
 
         api.MapGet("/users", GetUsersAsync)
             .RequireAuthorization()
-            .RequireRateLimiting("authenticated");
+            .RequireRateLimiting("authenticated")
+            .WithTags("Users")
+            .WithName("ListUsers")
+            .WithSummary("List users available for assignment")
+            .Produces<UserResponse[]>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
         api.MapCaseEndpoints();
 
         return endpoints;

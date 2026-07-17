@@ -11,6 +11,7 @@ internal static class CaseMappings
     public static CaseListItemResponse ToListItem(CaseRecord item) =>
         new(
             item.Id,
+            item.Version,
             item.Reference,
             item.Title,
             item.Summary,
@@ -76,6 +77,7 @@ internal static class CaseMappings
     private static CaseDetailResponse ToDetail(CaseRecord item) =>
         new(
             item.Id,
+            item.Version,
             item.Reference,
             item.Title,
             item.Summary,

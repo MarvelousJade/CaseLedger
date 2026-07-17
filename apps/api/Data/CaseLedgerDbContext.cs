@@ -26,6 +26,7 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
         var caseRecord = modelBuilder.Entity<CaseRecord>();
         caseRecord.ToTable("Cases");
         caseRecord.HasKey(item => item.Id);
+        caseRecord.Property(item => item.Version).IsConcurrencyToken();
         caseRecord.Property(item => item.Reference).HasMaxLength(32).IsRequired();
         caseRecord.Property(item => item.Title).HasMaxLength(160).IsRequired();
         caseRecord.Property(item => item.Summary).HasMaxLength(4000).IsRequired();
@@ -82,6 +83,7 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        PrepareCaseVersions();
         GuardAuditHistory();
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
@@ -90,8 +92,27 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
         bool acceptAllChangesOnSuccess,
         CancellationToken cancellationToken = default)
     {
+        PrepareCaseVersions();
         GuardAuditHistory();
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void PrepareCaseVersions()
+    {
+        foreach (var entry in ChangeTracker.Entries<CaseRecord>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                if (entry.Entity.Version == Guid.Empty)
+                {
+                    entry.Entity.Version = Guid.NewGuid();
+                }
+            }
+            else if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.Version = Guid.NewGuid();
+            }
+        }
     }
 
     private void GuardAuditHistory()

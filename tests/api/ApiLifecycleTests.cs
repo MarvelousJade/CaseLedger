@@ -47,8 +47,9 @@ public sealed class ApiLifecycleTests
         Assert.Equal(analyst.Id, created.AssigneeId);
         Assert.Single(created.Activity);
         Assert.EndsWith(created.Id.ToString("D"), createResponse.Headers.Location?.OriginalString);
+        Assert.Equal($"\"{created.Version:D}\"", createResponse.Headers.ETag?.Tag);
 
-        var patchResponse = await client.SendAsync(new HttpRequestMessage(
+        var patchRequest = new HttpRequestMessage(
             HttpMethod.Patch,
             $"/api/cases/{created.Id:D}")
         {
@@ -59,9 +60,13 @@ public sealed class ApiLifecycleTests
                 assigneeId = admin.Id,
                 tags = new[] { "webhook", "escalated" }
             })
-        });
+        };
+        patchRequest.Headers.IfMatch.Add(createResponse.Headers.ETag!);
+        var patchResponse = await client.SendAsync(patchRequest);
         Assert.Equal(HttpStatusCode.OK, patchResponse.StatusCode);
         var updated = await patchResponse.Content.ReadRequiredJsonAsync<CaseDetailResponse>();
+        Assert.NotEqual(created.Version, updated.Version);
+        Assert.Equal($"\"{updated.Version:D}\"", patchResponse.Headers.ETag?.Tag);
         Assert.Equal("InProgress", updated.Status);
         Assert.Equal("Critical", updated.Severity);
         Assert.Equal(admin.Id, updated.AssigneeId);

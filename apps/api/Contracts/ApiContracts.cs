@@ -1,3 +1,5 @@
+using Microsoft.AspNetCore.Mvc;
+
 namespace CaseLedger.Api.Contracts;
 
 public sealed record LoginRequest(string? Email, string? Password);
@@ -35,12 +37,45 @@ public sealed record AddEvidenceRequest(
     string? MediaType,
     string? Sha256);
 
+public sealed class CaseListQuery
+{
+    [FromQuery(Name = "search")]
+    public string? Search { get; init; }
+
+    [FromQuery(Name = "q")]
+    public string? LegacySearch { get; init; }
+
+    [FromQuery(Name = "status")]
+    public string? Status { get; init; }
+
+    [FromQuery(Name = "severity")]
+    public string? Severity { get; init; }
+
+    [FromQuery(Name = "page")]
+    public int? Page { get; init; }
+
+    [FromQuery(Name = "pageSize")]
+    public int? PageSize { get; init; }
+
+    [FromQuery(Name = "offset")]
+    public int? LegacyOffset { get; init; }
+
+    [FromQuery(Name = "limit")]
+    public int? LegacyLimit { get; init; }
+}
+
 public sealed record CaseCollectionResponse(
     IReadOnlyList<CaseListItemResponse> Items,
-    int Total);
+    int Total,
+    int Page,
+    int PageSize,
+    int TotalPages,
+    bool HasNextPage,
+    bool HasPreviousPage);
 
 public sealed record CaseListItemResponse(
     Guid Id,
+    Guid Version,
     string Reference,
     string Title,
     string Summary,
@@ -57,6 +92,7 @@ public sealed record CaseListItemResponse(
 
 public sealed record CaseDetailResponse(
     Guid Id,
+    Guid Version,
     string Reference,
     string Title,
     string Summary,

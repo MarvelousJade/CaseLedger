@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +19,18 @@ builder.Services.AddProblemDetails(options =>
     {
         context.ProblemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
     };
+});
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "CaseLedger API",
+        Version = "v1",
+        Description = "Authenticated case-management and audit-integrity REST API. " +
+                      "Call POST /api/auth/login first to establish the HTTP-only session cookie."
+    });
 });
 
 builder.Services.Configure<Microsoft.AspNetCore.Http.Json.JsonOptions>(options =>
@@ -125,6 +138,12 @@ builder.Services
 var app = builder.Build();
 
 app.UseExceptionHandler();
+app.UseSwagger();
+app.UseSwaggerUI(options =>
+{
+    options.DocumentTitle = "CaseLedger API documentation";
+    options.SwaggerEndpoint("/swagger/v1/swagger.json", "CaseLedger API v1");
+});
 app.UseDefaultFiles();
 app.UseStaticFiles();
 app.UseCors();
@@ -132,11 +151,17 @@ app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).AllowAnonymous();
+app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
+    .AllowAnonymous()
+    .WithName("Health")
+    .WithTags("System")
+    .WithSummary("Check API process health")
+    .Produces(StatusCodes.Status200OK);
 app.MapCaseLedgerApi();
 app.MapGraphQL("/graphql")
     .RequireAuthorization()
-    .RequireRateLimiting("authenticated");
+    .RequireRateLimiting("authenticated")
+    .ExcludeFromDescription();
 app.MapFallbackToFile("index.html");
 
 await using (var scope = app.Services.CreateAsyncScope())

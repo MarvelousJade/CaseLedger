@@ -28,6 +28,7 @@ public sealed class User
 public sealed class CaseRecord
 {
     public Guid Id { get; set; }
+    public Guid Version { get; set; } = Guid.NewGuid();
     public string Reference { get; set; } = string.Empty;
     public string Title { get; set; } = string.Empty;
     public string Summary { get; set; } = string.Empty;

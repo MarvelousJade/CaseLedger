@@ -4,6 +4,7 @@ using CaseLedger.Api.Contracts;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Domain;
 using CaseLedger.Api.Services;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace CaseLedger.Api.Endpoints;
@@ -16,24 +17,88 @@ public static class CaseEndpoints
     {
         var cases = api.MapGroup("/cases")
             .RequireAuthorization()
-            .RequireRateLimiting("authenticated");
+            .RequireRateLimiting("authenticated")
+            .WithTags("Cases");
 
-        cases.MapGet("", GetCasesAsync);
-        cases.MapPost("", CreateCaseAsync);
-        cases.MapGet("/{id:guid}", GetCaseAsync);
-        cases.MapPatch("/{id:guid}", UpdateCaseAsync);
-        cases.MapPost("/{id:guid}/comments", AddCommentAsync);
-        cases.MapPost("/{id:guid}/evidence", AddEvidenceAsync);
-        cases.MapGet("/{id:guid}/audit", GetAuditAsync);
-        cases.MapGet("/{id:guid}/audit/verify", VerifyAuditAsync);
+        cases.MapGet("", GetCasesAsync)
+            .WithName("ListCases")
+            .WithSummary("List and filter cases")
+            .Produces<CaseCollectionResponse>()
+            .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapPost("", CreateCaseAsync)
+            .WithName("CreateCase")
+            .WithSummary("Create a case")
+            .Produces<CaseDetailResponse>(StatusCodes.Status201Created)
+            .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapGet("/{id:guid}", GetCaseAsync)
+            .WithName("GetCase")
+            .WithSummary("Get a case and its current ETag")
+            .Produces<CaseDetailResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapPatch("/{id:guid}", UpdateCaseAsync)
+            .WithName("UpdateCase")
+            .WithSummary("Update a case when its ETag matches")
+            .Accepts<UpdateCaseRequest>("application/json")
+            .Produces<CaseDetailResponse>()
+            .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces<ProblemDetails>(StatusCodes.Status412PreconditionFailed)
+            .Produces<ProblemDetails>(StatusCodes.Status428PreconditionRequired)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapPost("/{id:guid}/comments", AddCommentAsync)
+            .WithName("AddCaseComment")
+            .WithSummary("Append a comment to a case")
+            .Produces<ActivityResponse>(StatusCodes.Status201Created)
+            .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces<ProblemDetails>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapPost("/{id:guid}/evidence", AddEvidenceAsync)
+            .WithName("AddCaseEvidence")
+            .WithSummary("Register evidence metadata and its digest")
+            .Produces<EvidenceResponse>(StatusCodes.Status201Created)
+            .Produces<HttpValidationProblemDetails>(StatusCodes.Status400BadRequest)
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces<ProblemDetails>(StatusCodes.Status409Conflict)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapGet("/{id:guid}/audit", GetAuditAsync)
+            .WithName("GetCaseAudit")
+            .WithSummary("Get a case's audit chain")
+            .Produces<AuditCollectionResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        cases.MapGet("/{id:guid}/audit/verify", VerifyAuditAsync)
+            .WithName("VerifyCaseAudit")
+            .WithSummary("Verify a case's audit chain")
+            .Produces<AuditVerificationResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status429TooManyRequests);
         cases.MapGet("/{id:guid}/audit/export", ExportAuditAsync)
-            .RequireAuthorization(policy => policy.RequireRole("Admin"));
+            .RequireAuthorization(policy => policy.RequireRole("Admin"))
+            .WithName("ExportCaseAudit")
+            .WithSummary("Export a case's audit chain (administrators only)")
+            .Produces<AuditExportResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status403Forbidden)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
+            .Produces(StatusCodes.Status429TooManyRequests);
 
         return api;
     }
 
     private static async Task<IResult> GetCasesAsync(
-        HttpRequest request,
+        [AsParameters] CaseListQuery request,
         CaseLedgerDbContext db,
         CancellationToken cancellationToken)
     {
@@ -44,7 +109,7 @@ public static class CaseEndpoints
             .Include(item => item.CreatedBy)
             .AsQueryable();
 
-        var search = request.Query["search"].FirstOrDefault() ?? request.Query["q"].FirstOrDefault();
+        var search = request.Search ?? request.LegacySearch;
         if (!string.IsNullOrWhiteSpace(search))
         {
             var term = search.Trim();
@@ -54,10 +119,10 @@ public static class CaseEndpoints
                 item.Summary.Contains(term));
         }
 
-        var statusText = request.Query["status"].FirstOrDefault();
+        var statusText = request.Status;
         if (!string.IsNullOrWhiteSpace(statusText))
         {
-            if (!Enum.TryParse<CaseStatus>(statusText, true, out var status))
+            if (!Enum.TryParse<CaseStatus>(statusText, true, out var status) || !Enum.IsDefined(status))
             {
                 errors["status"] = ["Status must be New, InProgress, or Resolved."];
             }
@@ -67,10 +132,10 @@ public static class CaseEndpoints
             }
         }
 
-        var severityText = request.Query["severity"].FirstOrDefault();
+        var severityText = request.Severity;
         if (!string.IsNullOrWhiteSpace(severityText))
         {
-            if (!Enum.TryParse<CaseSeverity>(severityText, true, out var severity))
+            if (!Enum.TryParse<CaseSeverity>(severityText, true, out var severity) || !Enum.IsDefined(severity))
             {
                 errors["severity"] = ["Severity must be Low, Medium, High, or Critical."];
             }
@@ -80,8 +145,52 @@ public static class CaseEndpoints
             }
         }
 
-        var offset = ParseBoundedInteger(request.Query["offset"].FirstOrDefault(), 0, 0, 10_000, "offset", errors);
-        var limit = ParseBoundedInteger(request.Query["limit"].FirstOrDefault(), 50, 1, 100, "limit", errors);
+        var usesPageParameters = request.Page.HasValue || request.PageSize.HasValue;
+        var usesLegacyParameters = request.LegacyOffset.HasValue || request.LegacyLimit.HasValue;
+        if (usesPageParameters && usesLegacyParameters)
+        {
+            errors["pagination"] = ["Use page/pageSize or the legacy offset/limit parameters, not both."];
+        }
+
+        var page = request.Page ?? 1;
+        var pageSize = request.PageSize ?? 50;
+        var offset = 0;
+        if (usesLegacyParameters)
+        {
+            offset = request.LegacyOffset ?? 0;
+            pageSize = request.LegacyLimit ?? 50;
+            if (offset is < 0 or > 10_000)
+            {
+                errors["offset"] = ["offset must be between 0 and 10000."];
+            }
+        }
+        else
+        {
+            if (page < 1)
+            {
+                errors["page"] = ["page must be 1 or greater."];
+            }
+        }
+
+        if (pageSize is < 1 or > 100)
+        {
+            var field = usesLegacyParameters ? "limit" : "pageSize";
+            errors[field] = [$"{field} must be between 1 and 100."];
+        }
+
+        if (!usesLegacyParameters && errors.Count == 0)
+        {
+            var calculatedOffset = (long)(page - 1) * pageSize;
+            if (calculatedOffset > int.MaxValue)
+            {
+                errors["page"] = ["page is too large for the requested pageSize."];
+            }
+            else
+            {
+                offset = (int)calculatedOffset;
+            }
+        }
+
         if (errors.Count > 0)
         {
             return Results.ValidationProblem(errors);
@@ -92,26 +201,47 @@ public static class CaseEndpoints
             .OrderByDescending(item => item.UpdatedAt)
             .ThenBy(item => item.Reference)
             .Skip(offset)
-            .Take(limit)
+            .Take(pageSize)
             .ToListAsync(cancellationToken);
 
+        if (usesLegacyParameters)
+        {
+            page = offset / pageSize + 1;
+        }
+
+        var totalPages = total == 0
+            ? 0
+            : (int)Math.Ceiling(total / (double)pageSize);
         return Results.Ok(new CaseCollectionResponse(
             items.Select(CaseMappings.ToListItem).ToArray(),
-            total));
+            total,
+            page,
+            pageSize,
+            totalPages,
+            offset + items.Count < total,
+            offset > 0));
     }
 
     private static async Task<IResult> GetCaseAsync(
         Guid id,
+        HttpResponse httpResponse,
         CaseLedgerDbContext db,
         CancellationToken cancellationToken)
     {
         var item = await CaseMappings.LoadDetailAsync(db, id, cancellationToken);
-        return item is null ? CaseNotFound(id) : Results.Ok(item);
+        if (item is null)
+        {
+            return CaseNotFound(id);
+        }
+
+        SetETag(httpResponse, item.Version);
+        return Results.Ok(item);
     }
 
     private static async Task<IResult> CreateCaseAsync(
         CreateCaseRequest request,
         ClaimsPrincipal principal,
+        HttpResponse httpResponse,
         CaseLedgerDbContext db,
         AuditChainService auditChain,
         CancellationToken cancellationToken)
@@ -187,17 +317,33 @@ public static class CaseEndpoints
         await db.SaveChangesAsync(cancellationToken);
 
         var response = await CaseMappings.LoadDetailAsync(db, caseRecord.Id, cancellationToken);
+        SetETag(httpResponse, caseRecord.Version);
         return Results.Created($"/api/cases/{caseRecord.Id:D}", response);
     }
 
     private static async Task<IResult> UpdateCaseAsync(
         Guid id,
         JsonElement body,
+        [FromHeader(Name = "If-Match")] string? ifMatch,
         ClaimsPrincipal principal,
+        HttpResponse httpResponse,
         CaseLedgerDbContext db,
         AuditChainService auditChain,
         CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(ifMatch))
+        {
+            return PreconditionRequired();
+        }
+
+        if (!TryParseCaseVersion(ifMatch, out var expectedVersion))
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]>
+            {
+                ["If-Match"] = ["If-Match must contain exactly one strong quoted case version ETag."]
+            });
+        }
+
         if (body.ValueKind != JsonValueKind.Object)
         {
             return Results.ValidationProblem(new Dictionary<string, string[]>
@@ -233,6 +379,12 @@ public static class CaseEndpoints
         if (item is null)
         {
             return CaseNotFound(id);
+        }
+
+        if (item.Version != expectedVersion)
+        {
+            SetETag(httpResponse, item.Version);
+            return PreconditionFailed();
         }
 
         var actor = await ApiEndpoints.GetCurrentUserAsync(principal, db, cancellationToken);
@@ -356,9 +508,29 @@ public static class CaseEndpoints
             actor,
             changes,
             cancellationToken: cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            db.ChangeTracker.Clear();
+            var currentVersion = await db.Cases
+                .AsNoTracking()
+                .Where(caseRecord => caseRecord.Id == id)
+                .Select(caseRecord => (Guid?)caseRecord.Version)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (currentVersion is null)
+            {
+                return CaseNotFound(id);
+            }
+
+            SetETag(httpResponse, currentVersion.Value);
+            return PreconditionFailed();
+        }
 
         var response = await CaseMappings.LoadDetailAsync(db, item.Id, cancellationToken);
+        SetETag(httpResponse, item.Version);
         return Results.Ok(response);
     }
 
@@ -398,7 +570,14 @@ public static class CaseEndpoints
             actor,
             new Dictionary<string, object?> { ["body"] = body },
             cancellationToken: cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return CaseWriteConflict();
+        }
 
         return Results.Created(
             $"/api/cases/{item.Id:D}/audit/{auditEvent.Sequence}",
@@ -462,7 +641,14 @@ public static class CaseEndpoints
                 ["sizeBytes"] = evidence.SizeBytes
             },
             cancellationToken: cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            return CaseWriteConflict();
+        }
 
         return Results.Created(
             $"/api/cases/{item.Id:D}/evidence/{evidence.Id:D}",
@@ -639,28 +825,6 @@ public static class CaseEndpoints
         return true;
     }
 
-    private static int ParseBoundedInteger(
-        string? value,
-        int defaultValue,
-        int minimum,
-        int maximum,
-        string field,
-        IDictionary<string, string[]> errors)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return defaultValue;
-        }
-
-        if (!int.TryParse(value, out var parsed) || parsed < minimum || parsed > maximum)
-        {
-            errors[field] = [$"{field} must be between {minimum} and {maximum}."];
-            return defaultValue;
-        }
-
-        return parsed;
-    }
-
     private static async Task<string> NextReferenceAsync(
         CaseLedgerDbContext db,
         int year,
@@ -703,4 +867,32 @@ public static class CaseEndpoints
     private static IResult AuthenticationRequired() => Results.Problem(
         statusCode: StatusCodes.Status401Unauthorized,
         title: "Authentication required");
+
+    private static void SetETag(HttpResponse response, Guid version) =>
+        response.Headers.ETag = $"\"{version:D}\"";
+
+    private static bool TryParseCaseVersion(string value, out Guid version)
+    {
+        version = default;
+        var candidate = value.Trim();
+        return candidate.Length == 38 &&
+               candidate[0] == '"' &&
+               candidate[^1] == '"' &&
+               Guid.TryParseExact(candidate[1..^1], "D", out version);
+    }
+
+    private static IResult PreconditionRequired() => Results.Problem(
+        statusCode: StatusCodes.Status428PreconditionRequired,
+        title: "If-Match is required",
+        detail: "Read the case, then send its quoted ETag in the If-Match header.");
+
+    private static IResult PreconditionFailed() => Results.Problem(
+        statusCode: StatusCodes.Status412PreconditionFailed,
+        title: "Case version is stale",
+        detail: "The case changed after it was read. Fetch the latest representation and retry.");
+
+    private static IResult CaseWriteConflict() => Results.Problem(
+        statusCode: StatusCodes.Status409Conflict,
+        title: "Case changed concurrently",
+        detail: "The case changed while the command was being saved. Fetch the latest case and retry.");
 }
