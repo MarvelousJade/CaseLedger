@@ -2,7 +2,9 @@ using System.Text.RegularExpressions;
 using CaseLedger.Api.Data;
 using CaseLedger.Api.Domain;
 using CaseLedger.Api.Realtime;
+using CaseLedger.Api.Webhooks;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace CaseLedger.Api.Messaging;
 
@@ -12,9 +14,19 @@ public enum ResultApplyDisposition
     Duplicate
 }
 
+public interface IAuditVerificationResultApplier
+{
+    Task<ResultApplyDisposition> HandleAsync(
+        AuditVerificationResultV1 result,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed partial class AuditVerificationResultHandler(
     CaseLedgerDbContext db,
-    IVerificationUpdateNotifier notifier)
+    IVerificationUpdateNotifier notifier,
+    IOptions<WebhookOptions>? webhookOptions = null,
+    TimeProvider? timeProvider = null)
+    : IAuditVerificationResultApplier
 {
     public async Task<ResultApplyDisposition> HandleAsync(
         AuditVerificationResultV1 result,
@@ -73,6 +85,13 @@ public sealed partial class AuditVerificationResultHandler(
         job.ChainHead = result.ChainHead;
         job.ErrorCode = expected.ErrorCode;
         job.CompletedAt = completedAt;
+        if (webhookOptions?.Value.Enabled == true)
+        {
+            var createdAt = NormalizeUtcToMicroseconds(
+                (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime);
+            db.WebhookDeliveries.Add(
+                VerificationWebhookV1.CreateDelivery(job, createdAt));
+        }
         await db.SaveChangesAsync(cancellationToken);
 
         await notifier.NotifyAsync(ToUpdate(job), cancellationToken);

@@ -3,7 +3,8 @@ import type { Logger } from "./logger.ts";
 
 export interface HealthState {
   database: boolean;
-  rabbitmq: boolean;
+  broker: boolean;
+  brokerProvider: "rabbitmq" | "azure-service-bus";
 }
 
 export async function startHealthServer(
@@ -18,7 +19,7 @@ export async function startHealthServer(
       return;
     }
 
-    const healthy = state.database && state.rabbitmq;
+    const healthy = state.database && state.broker;
     response.writeHead(healthy ? 200 : 503, {
       "content-type": "application/json; charset=utf-8",
       "cache-control": "no-store",
@@ -27,7 +28,8 @@ export async function startHealthServer(
       JSON.stringify({
         status: healthy ? "healthy" : "degraded",
         database: state.database,
-        rabbitmq: state.rabbitmq,
+        broker: state.broker,
+        brokerProvider: state.brokerProvider,
       }),
     );
   });

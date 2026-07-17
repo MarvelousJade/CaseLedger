@@ -17,17 +17,24 @@ public sealed record AuditVerificationRequestedDataV1(
     AuditVerificationSnapshotV1 Snapshot);
 
 /// <summary>
-/// SnapshotSha256 is computed across events in sequence order. Each event contributes the exact
-/// UTF-8 framing: sequence\npreviousHash\nhash\nutf8ByteLength(canonicalData)\ncanonicalData\n.
-/// The byte length is invariant-culture decimal and canonicalData is appended as its original
-/// UTF-8 bytes, without JSON reserialization.
+/// SnapshotSha256 is computed across events in sequence order. Every field contributes its
+/// invariant-culture UTF-8 byte length, a newline, the original UTF-8 bytes, and a final newline.
+/// Field order is eventId, caseId, sequence, eventType, description, actorId, actorName,
+/// createdAt, previousHash, hash, canonicalData.
 /// </summary>
 public sealed record AuditVerificationSnapshotV1(
     int EventCount,
     IReadOnlyList<AuditVerificationSnapshotEventV1> Events);
 
 public sealed record AuditVerificationSnapshotEventV1(
+    string EventId,
+    string CaseId,
     int Sequence,
+    string EventType,
+    string Description,
+    string ActorId,
+    string ActorName,
+    string CreatedAt,
     string PreviousHash,
     string Hash,
     string CanonicalData);

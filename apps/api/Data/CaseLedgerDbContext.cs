@@ -12,6 +12,7 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
     public DbSet<AuditVerificationJob> AuditVerificationJobs => Set<AuditVerificationJob>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<WebhookDelivery> WebhookDeliveries => Set<WebhookDelivery>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -126,6 +127,22 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
         outboxMessage.Property(item => item.LastErrorCode).HasMaxLength(80);
         outboxMessage.HasIndex(
             item => new { item.PublishedAt, item.DeadLetteredAt, item.NextAttemptAt });
+
+        var webhookDelivery = modelBuilder.Entity<WebhookDelivery>();
+        webhookDelivery.ToTable("WebhookDeliveries");
+        webhookDelivery.HasKey(item => item.Id);
+        webhookDelivery.Property(item => item.ResultId).HasMaxLength(100).IsRequired();
+        webhookDelivery.Property(item => item.EventType).HasMaxLength(160).IsRequired();
+        webhookDelivery.Property(item => item.PayloadJson).HasColumnType("TEXT").IsRequired();
+        webhookDelivery.Property(item => item.LastErrorCode).HasMaxLength(80);
+        webhookDelivery.HasIndex(item => item.VerificationJobId).IsUnique();
+        webhookDelivery.HasIndex(item => item.ResultId).IsUnique();
+        webhookDelivery.HasIndex(
+            item => new { item.DeliveredAt, item.DeadLetteredAt, item.NextAttemptAt });
+        webhookDelivery.HasOne(item => item.VerificationJob)
+            .WithMany()
+            .HasForeignKey(item => item.VerificationJobId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

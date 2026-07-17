@@ -12,13 +12,17 @@ namespace CaseLedger.Api.Tests;
 public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
 {
     private readonly bool messagingEnabled;
+    private readonly string messagingProvider;
     private readonly string databasePath = Path.Combine(
         Path.GetTempPath(),
         $"caseledger-tests-{Guid.NewGuid():N}.db");
 
-    public CaseLedgerFactory(bool messagingEnabled = false)
+    public CaseLedgerFactory(
+        bool messagingEnabled = false,
+        string messagingProvider = "RabbitMq")
     {
         this.messagingEnabled = messagingEnabled;
+        this.messagingProvider = messagingProvider;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -30,7 +34,8 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
             {
                 ["Database:Provider"] = "Sqlite",
                 ["ConnectionStrings:CaseLedger"] = $"Data Source={databasePath}",
-                ["Messaging:Enabled"] = messagingEnabled.ToString()
+                ["Messaging:Enabled"] = messagingEnabled.ToString(),
+                ["Messaging:Provider"] = messagingProvider
             });
         });
         builder.ConfigureServices(services =>

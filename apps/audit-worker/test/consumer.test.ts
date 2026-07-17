@@ -24,6 +24,11 @@ class RecordingAcknowledger implements Acknowledger {
 
 class RecordingPublisher implements TransportPublisher {
   readonly calls: string[] = [];
+  private readonly order: string[] | undefined;
+
+  constructor(order?: string[]) {
+    this.order = order;
+  }
 
   async publishRetry(
     _message: ConsumeMessage,
@@ -40,6 +45,7 @@ class RecordingPublisher implements TransportPublisher {
     _attempt: number,
   ): Promise<void> {
     this.calls.push(`dead:${code}`);
+    this.order?.push(`dead:${code}`);
   }
 
   async publishResult(result: VerificationResultMessage): Promise<void> {
@@ -54,7 +60,25 @@ class FailingRepository implements ResultRepository {
 }
 
 function validRequest(): VerificationRequest {
-  const canonicalData = '{"eventType":"case.created"}';
+  const eventId = "11111111-1111-4111-8111-111111111111";
+  const caseId = "91ad19ce-a910-4031-aa59-3c256f31ef67";
+  const actorId = "33333333-3333-4333-8333-333333333333";
+  const eventType = "case.created";
+  const description = "Case created";
+  const actorName = "Analyst";
+  const createdAt = "2026-07-16T18:00:00.0000000Z";
+  const canonicalData = JSON.stringify({
+    version: 1,
+    eventId,
+    caseId,
+    sequence: 1,
+    eventType,
+    description,
+    actorId,
+    actorName,
+    createdAt,
+    data: {},
+  });
   const hash = computeAuditHash(AUDIT_GENESIS_HASH, canonicalData);
   const jobId = "184e1670-4ac9-4b30-beda-2b78f0d15a77";
   return {
@@ -65,13 +89,27 @@ function validRequest(): VerificationRequest {
     correlationId: "trace-01HZY6EFKYM7JKQ8YVZ5M2DTWK",
     requestedAt: "2026-07-16T18:00:00.000Z",
     data: {
-      caseId: "91ad19ce-a910-4031-aa59-3c256f31ef67",
+      caseId,
       verificationProfile: "export-chain-v1",
       targetSequence: 1,
       targetHash: hash,
       snapshot: {
         eventCount: 1,
-        events: [{ sequence: 1, previousHash: AUDIT_GENESIS_HASH, hash, canonicalData }],
+        events: [
+          {
+            eventId,
+            caseId,
+            sequence: 1,
+            eventType,
+            description,
+            actorId,
+            actorName,
+            createdAt,
+            previousHash: AUDIT_GENESIS_HASH,
+            hash,
+            canonicalData,
+          },
+        ],
       },
     },
   };
@@ -137,7 +175,7 @@ test("persists the result before acknowledging the request", async () => {
 
   const processor = new VerificationProcessor(
     {
-      async storeResult(_jobId, _digest, result) {
+      async storeResult(_jobId, _fingerprint, _snapshotSha256, result) {
         return { disposition: "stored", result };
       },
     },
@@ -168,17 +206,32 @@ test("routes attempts through 5s, 30s, and 5m before terminal handling", async (
   }
 });
 
-test("publishes terminal error result before the dead-letter copy", async () => {
+test("stores the terminal error result before the dead-letter copy", async () => {
+  const order: string[] = [];
+  let callCount = 0;
+  const repository: ResultRepository = {
+    async storeResult(_jobId, _fingerprint, _snapshotSha256, result) {
+      callCount += 1;
+      if (callCount === 1) {
+        order.push("store:initial-failed");
+        throw new Error("temporary storage failure");
+      }
+      order.push(`store:${result.outcome}:${result.error?.code ?? "none"}`);
+      return { disposition: "stored", result };
+    },
+  };
   const acknowledger = new RecordingAcknowledger();
-  const publisher = new RecordingPublisher();
-  await handler(new FailingRepository(), acknowledger, publisher).handle(
+  const publisher = new RecordingPublisher(order);
+  await handler(repository, acknowledger, publisher).handle(
     delivery(validRequest(), 3),
   );
 
-  assert.deepEqual(publisher.calls, [
-    "result:error:RETRY_EXHAUSTED",
+  assert.deepEqual(order, [
+    "store:initial-failed",
+    "store:error:RETRY_EXHAUSTED",
     "dead:RETRY_EXHAUSTED",
   ]);
+  assert.deepEqual(publisher.calls, ["dead:RETRY_EXHAUSTED"]);
   assert.equal(acknowledger.messages.length, 1);
 });
 

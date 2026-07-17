@@ -124,3 +124,21 @@ public sealed class OutboxMessage
     public DateTime? LockedUntil { get; set; }
     public string? LastErrorCode { get; set; }
 }
+
+public sealed class WebhookDelivery
+{
+    public Guid Id { get; set; }
+    public Guid VerificationJobId { get; set; }
+    public AuditVerificationJob VerificationJob { get; set; } = null!;
+    public string ResultId { get; set; } = string.Empty;
+    public string EventType { get; set; } = string.Empty;
+    public string PayloadJson { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public DateTime NextAttemptAt { get; set; }
+    public DateTime? DeliveredAt { get; set; }
+    public DateTime? DeadLetteredAt { get; set; }
+    public int AttemptCount { get; set; }
+    public Guid? LockId { get; set; }
+    public DateTime? LockedUntil { get; set; }
+    public string? LastErrorCode { get; set; }
+}

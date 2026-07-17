@@ -9,6 +9,16 @@ export interface AuditEvent {
   canonicalData: string;
 }
 
+export interface AuditProjectionEvent extends AuditEvent {
+  eventId: string;
+  caseId: string;
+  eventType: string;
+  description: string;
+  actorId: string;
+  actorName: string;
+  createdAt: string;
+}
+
 export interface VerificationResult {
   count: number;
   chainHead: string | null;
@@ -25,7 +35,8 @@ export type AuditVerificationErrorCode =
   | "PREVIOUS_HASH_MISMATCH"
   | "HASH_MISMATCH"
   | "TARGET_SEQUENCE_MISMATCH"
-  | "TARGET_HASH_MISMATCH";
+  | "TARGET_HASH_MISMATCH"
+  | "CANONICAL_PROJECTION_MISMATCH";
 
 export interface AuditVerificationTarget {
   targetSequence: number;
@@ -124,6 +135,46 @@ function readEvent(value: unknown, index: number): AuditEvent {
     previousHash,
     hash,
     canonicalData,
+  };
+}
+
+function readProjectionEvent(value: unknown, index: number): AuditProjectionEvent {
+  const basic = readEvent(value, index);
+  const context = `event #${index + 1}`;
+  if (!isObject(value)) {
+    throw new AuditVerificationError("INVALID_EVENT", `${context}: expected an object`, {
+      checkedEvents: index + 1,
+      brokenAt: index + 1,
+    });
+  }
+
+  const eventId = getField(value, "eventId", context);
+  const caseId = getField(value, "caseId", context);
+  const eventType = getField(value, "eventType", context);
+  const description = getField(value, "description", context);
+  const actorId = getField(value, "actorId", context);
+  const actorName = getField(value, "actorName", context);
+  const createdAt = getField(value, "createdAt", context);
+  const values = { eventId, caseId, eventType, description, actorId, actorName, createdAt };
+  for (const [field, fieldValue] of Object.entries(values)) {
+    if (typeof fieldValue !== "string") {
+      throw new AuditVerificationError(
+        "INVALID_EVENT",
+        `${context}: ${field} must be a string`,
+        { checkedEvents: index + 1, brokenAt: basic.sequence },
+      );
+    }
+  }
+
+  return {
+    ...basic,
+    eventId: eventId as string,
+    caseId: caseId as string,
+    eventType: eventType as string,
+    description: description as string,
+    actorId: actorId as string,
+    actorName: actorName as string,
+    createdAt: createdAt as string,
   };
 }
 
@@ -236,6 +287,51 @@ export function verifyAuditExport(
     count: rawEvents.length,
     chainHead: priorEvent?.hash ?? null,
   };
+}
+
+export function verifyAuditProjection(
+  value: unknown,
+  target?: AuditVerificationTarget,
+): VerificationResult {
+  const result = verifyAuditExport(value, target);
+  const rawEvents = extractEvents(value);
+
+  for (let index = 0; index < rawEvents.length; index += 1) {
+    const event = readProjectionEvent(rawEvents[index], index);
+    if (!canonicalProjectionMatches(event)) {
+      throw new AuditVerificationError(
+        "CANONICAL_PROJECTION_MISMATCH",
+        `event #${index + 1}: canonical data does not match projected audit fields`,
+        { checkedEvents: index + 1, brokenAt: event.sequence },
+      );
+    }
+  }
+
+  return result;
+}
+
+function canonicalProjectionMatches(event: AuditProjectionEvent): boolean {
+  try {
+    const parsed: unknown = JSON.parse(event.canonicalData);
+    if (!isObject(parsed)) {
+      return false;
+    }
+
+    return (
+      parsed.version === 1 &&
+      parsed.eventId === event.eventId &&
+      parsed.caseId === event.caseId &&
+      parsed.sequence === event.sequence &&
+      parsed.eventType === event.eventType &&
+      parsed.description === event.description &&
+      parsed.actorId === event.actorId &&
+      parsed.actorName === event.actorName &&
+      parsed.createdAt === event.createdAt &&
+      isObject(parsed.data)
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function formatVerificationSummary(result: VerificationResult): string {

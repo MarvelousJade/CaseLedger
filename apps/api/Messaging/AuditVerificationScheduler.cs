@@ -37,22 +37,15 @@ public sealed class AuditVerificationScheduler(
             .AsNoTracking()
             .Where(item => item.CaseId == caseId)
             .OrderBy(item => item.Sequence)
-            .Select(item => new AuditVerificationSnapshotEventV1(
-                item.Sequence,
-                item.PreviousHash,
-                item.Hash,
-                item.CanonicalData))
             .ToListAsync(cancellationToken);
+        var persistedSnapshotEvents = persistedEvents
+            .Select(ToSnapshotEvent);
         var localEvents = db.ChangeTracker
             .Entries<AuditEvent>()
             .Where(entry => entry.State == EntityState.Added && entry.Entity.CaseId == caseId)
-            .Select(entry => new AuditVerificationSnapshotEventV1(
-                entry.Entity.Sequence,
-                entry.Entity.PreviousHash,
-                entry.Entity.Hash,
-                entry.Entity.CanonicalData));
+            .Select(entry => ToSnapshotEvent(entry.Entity));
 
-        var eventsBySequence = persistedEvents
+        var eventsBySequence = persistedSnapshotEvents
             .Concat(localEvents)
             .GroupBy(item => item.Sequence)
             .Select(group => group.Last())
@@ -121,17 +114,19 @@ public sealed class AuditVerificationScheduler(
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var auditEvent in events.OrderBy(item => item.Sequence))
         {
-            AppendUtf8(hash, auditEvent.Sequence.ToString(CultureInfo.InvariantCulture));
-            AppendUtf8(hash, "\n");
-            AppendUtf8(hash, auditEvent.PreviousHash);
-            AppendUtf8(hash, "\n");
-            AppendUtf8(hash, auditEvent.Hash);
-            AppendUtf8(hash, "\n");
-            var canonicalData = Encoding.UTF8.GetBytes(auditEvent.CanonicalData);
-            AppendUtf8(hash, canonicalData.Length.ToString(CultureInfo.InvariantCulture));
-            AppendUtf8(hash, "\n");
-            hash.AppendData(canonicalData);
-            AppendUtf8(hash, "\n");
+            AppendFramed(hash, auditEvent.EventId);
+            AppendFramed(hash, auditEvent.CaseId);
+            AppendFramed(
+                hash,
+                auditEvent.Sequence.ToString(CultureInfo.InvariantCulture));
+            AppendFramed(hash, auditEvent.EventType);
+            AppendFramed(hash, auditEvent.Description);
+            AppendFramed(hash, auditEvent.ActorId);
+            AppendFramed(hash, auditEvent.ActorName);
+            AppendFramed(hash, auditEvent.CreatedAt);
+            AppendFramed(hash, auditEvent.PreviousHash);
+            AppendFramed(hash, auditEvent.Hash);
+            AppendFramed(hash, auditEvent.CanonicalData);
         }
 
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
@@ -140,13 +135,50 @@ public sealed class AuditVerificationScheduler(
     private static void AppendUtf8(IncrementalHash hash, string value) =>
         hash.AppendData(Encoding.UTF8.GetBytes(value));
 
-    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
+    private static void AppendFramed(IncrementalHash hash, string value)
     {
-        var utc = value.Kind == DateTimeKind.Utc
-            ? value
-            : value.ToUniversalTime();
+        var bytes = Encoding.UTF8.GetBytes(value);
+        AppendUtf8(hash, bytes.Length.ToString(CultureInfo.InvariantCulture));
+        AppendUtf8(hash, "\n");
+        hash.AppendData(bytes);
+        AppendUtf8(hash, "\n");
+    }
+
+    private static AuditVerificationSnapshotEventV1 ToSnapshotEvent(
+        AuditEvent auditEvent) =>
+        new(
+            FormatGuid(auditEvent.Id),
+            FormatGuid(auditEvent.CaseId),
+            auditEvent.Sequence,
+            auditEvent.EventType,
+            auditEvent.Description,
+            FormatGuid(auditEvent.ActorId),
+            auditEvent.ActorName,
+            FormatUtc(auditEvent.CreatedAt),
+            auditEvent.PreviousHash,
+            auditEvent.Hash,
+            auditEvent.CanonicalData);
+
+    private static string FormatGuid(Guid value) =>
+        value.ToString("D").ToLowerInvariant();
+
+    private static string FormatUtc(DateTime value) =>
+        NormalizeUtc(value).ToString("O", CultureInfo.InvariantCulture);
+
+    private static DateTime NormalizeUtc(DateTime value)
+    {
+        var utc = value.Kind switch
+        {
+            DateTimeKind.Utc => value,
+            DateTimeKind.Local => value.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
+        };
+
         return new DateTime(
             utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
             DateTimeKind.Utc);
     }
+
+    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
+        => NormalizeUtc(value);
 }

@@ -9,6 +9,7 @@
     "test": "node --test"
   },
   "dependencies": {
+    "@azure/service-bus": "7.9.5",
     "@caseledger/audit-verifier": "file:../../tools/audit-verifier",
     "amqplib": "2.0.1",
     "pg": "8.22.0",

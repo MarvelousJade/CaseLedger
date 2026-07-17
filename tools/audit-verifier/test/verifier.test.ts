@@ -11,6 +11,7 @@ import {
   computeAuditHash,
   formatVerificationSummary,
   verifyAuditExport,
+  verifyAuditProjection,
 } from "../src/verifier.ts";
 
 interface TestEvent {
@@ -131,6 +132,52 @@ test("enforces a captured target sequence and chain head", () => {
       }),
     (error: unknown) =>
       error instanceof AuditVerificationError && error.code === "TARGET_HASH_MISMATCH",
+  );
+});
+
+test("projection verification detects fields changed outside canonical data", () => {
+  const eventId = "11111111-1111-4111-8111-111111111111";
+  const caseId = "22222222-2222-4222-8222-222222222222";
+  const actorId = "33333333-3333-4333-8333-333333333333";
+  const createdAt = "2026-07-16T18:00:00.0000000Z";
+  const canonicalData = JSON.stringify({
+    version: 1,
+    eventId,
+    caseId,
+    sequence: 1,
+    eventType: "case.created",
+    description: "Case created",
+    actorId,
+    actorName: "Analyst",
+    createdAt,
+    data: {},
+  });
+  const hash = computeAuditHash(AUDIT_GENESIS_HASH, canonicalData);
+  const event = {
+    eventId,
+    caseId,
+    sequence: 1,
+    eventType: "case.created",
+    description: "Changed outside canonical data",
+    actorId,
+    actorName: "Analyst",
+    createdAt,
+    previousHash: AUDIT_GENESIS_HASH,
+    hash,
+    canonicalData,
+  };
+
+  assert.throws(
+    () => verifyAuditProjection([event], { targetSequence: 1, targetHash: hash }),
+    (error: unknown) =>
+      error instanceof AuditVerificationError &&
+      error.code === "CANONICAL_PROJECTION_MISMATCH" &&
+      error.checkedEvents === 1 &&
+      error.brokenAt === 1,
+  );
+
+  assert.doesNotThrow(() =>
+    verifyAuditProjection([{ ...event, description: "Case created" }]),
   );
 });
 

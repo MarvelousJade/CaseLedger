@@ -5,7 +5,8 @@ export interface Logger {
   log(level: LogLevel, event: string, fields?: LogFields): void;
 }
 
-const FORBIDDEN_FIELD = /(body|canonical|password|payload|secret|token|url)/i;
+const FORBIDDEN_FIELD =
+  /(body|canonical|connectionstring|credential|password|payload|secret|sharedaccess|token|url)/i;
 
 export function createLogger(clock: () => Date = () => new Date()): Logger {
   return {

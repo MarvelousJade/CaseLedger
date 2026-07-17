@@ -1,10 +1,11 @@
 import {
   AuditVerificationError,
-  verifyAuditExport,
+  verifyAuditProjection,
   type AuditVerificationErrorCode,
 } from "@caseledger/audit-verifier";
 import {
   RESULT_MESSAGE_TYPE,
+  computeRequestFingerprint,
   computeSnapshotSha256,
   resultIdFor,
   type VerificationRequest,
@@ -29,6 +30,7 @@ export class VerificationProcessor {
   }
 
   async process(request: VerificationRequest, attempt: number): Promise<StoredResult> {
+    const requestFingerprint = computeRequestFingerprint(request);
     const snapshotSha256 = computeSnapshotSha256(request.data.snapshot.events);
     const result = buildVerificationResult(
       request,
@@ -37,7 +39,34 @@ export class VerificationProcessor {
       this.workerVersion,
       this.clock,
     );
-    return this.repository.storeResult(request.jobId, snapshotSha256, result);
+    return this.repository.storeResult(
+      request.jobId,
+      requestFingerprint,
+      snapshotSha256,
+      result,
+    );
+  }
+
+  async storeTerminalError(
+    request: VerificationRequest,
+    attempt: number,
+    code: "RETRY_EXHAUSTED",
+  ): Promise<StoredResult> {
+    const requestFingerprint = computeRequestFingerprint(request);
+    const snapshotSha256 = computeSnapshotSha256(request.data.snapshot.events);
+    const result = buildTerminalErrorResult(
+      request,
+      attempt,
+      this.workerVersion,
+      code,
+      this.clock,
+    );
+    return this.repository.storeResult(
+      request.jobId,
+      requestFingerprint,
+      snapshotSha256,
+      result,
+    );
   }
 }
 
@@ -51,7 +80,7 @@ export function buildVerificationResult(
   const base = resultBase(request, snapshotSha256, attempt, workerVersion, clock);
 
   try {
-    const verified = verifyAuditExport(request.data.snapshot.events, {
+    const verified = verifyAuditProjection(request.data.snapshot.events, {
       targetSequence: request.data.targetSequence,
       targetHash: request.data.targetHash,
     });
@@ -117,7 +146,7 @@ export function buildTerminalErrorResult(
       code,
       message:
         code === "IDEMPOTENCY_KEY_REUSED"
-          ? "jobId was reused with different snapshot content"
+          ? "jobId was reused with different immutable request content"
           : "verification could not complete after the retry policy was exhausted",
       retryable: false,
     },
@@ -170,6 +199,8 @@ function publicVerificationMessage(code: AuditVerificationErrorCode): string {
     HASH_MISMATCH: "audit event hash does not match its canonical content",
     TARGET_SEQUENCE_MISMATCH: "verified event count does not match the target sequence",
     TARGET_HASH_MISMATCH: "verified chain head does not match the target hash",
+    CANONICAL_PROJECTION_MISMATCH:
+      "canonical audit data does not match the projected event fields",
   };
   return messages[code];
 }

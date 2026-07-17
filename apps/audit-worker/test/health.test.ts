@@ -7,7 +7,11 @@ import type { Logger } from "../src/logger.ts";
 const logger: Logger = { log() {} };
 
 test("health endpoint reports dependency readiness without exposing configuration", async () => {
-  const state: HealthState = { database: true, rabbitmq: false };
+  const state: HealthState = {
+    database: true,
+    broker: false,
+    brokerProvider: "rabbitmq",
+  };
   const server = await startHealthServer(state, "127.0.0.1", 0, logger);
   const address = server.address() as AddressInfo;
   const url = `http://127.0.0.1:${address.port}/health`;
@@ -18,16 +22,18 @@ test("health endpoint reports dependency readiness without exposing configuratio
     assert.deepEqual(await degraded.json(), {
       status: "degraded",
       database: true,
-      rabbitmq: false,
+      broker: false,
+      brokerProvider: "rabbitmq",
     });
 
-    state.rabbitmq = true;
+    state.broker = true;
     const healthy = await fetch(url);
     assert.equal(healthy.status, 200);
     assert.deepEqual(await healthy.json(), {
       status: "healthy",
       database: true,
-      rabbitmq: true,
+      broker: true,
+      brokerProvider: "rabbitmq",
     });
   } finally {
     await closeServer(server);

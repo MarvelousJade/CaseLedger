@@ -9,7 +9,7 @@ export class IdempotencyConflictError extends Error {
   readonly jobId: string;
 
   constructor(jobId: string) {
-    super("jobId was already used with a different snapshot digest");
+    super("jobId was already used with a different immutable request fingerprint");
     this.name = "IdempotencyConflictError";
     this.jobId = jobId;
   }
@@ -32,13 +32,15 @@ export interface OutboxItem {
 export interface ResultRepository {
   storeResult(
     jobId: string,
+    requestFingerprint: string,
     snapshotSha256: string,
     result: VerificationResultMessage,
   ): Promise<StoredResult>;
 }
 
 interface InboxRow extends QueryResultRow {
-  snapshot_sha256: string;
+  request_fingerprint: string;
+  fingerprint_version: number;
   result_payload: unknown;
 }
 
@@ -63,11 +65,10 @@ export class PostgresResultRepository implements ResultRepository {
   }
 
   async migrate(): Promise<void> {
-    const migration = await readFile(
-      new URL("../migrations/001_inbox_outbox.sql", import.meta.url),
-      "utf8",
-    );
-    await this.pool.query(migration);
+    for (const name of ["001_inbox_outbox.sql", "002_request_fingerprint.sql"]) {
+      const migration = await readFile(new URL(`../migrations/${name}`, import.meta.url), "utf8");
+      await this.pool.query(migration);
+    }
   }
 
   async ping(): Promise<void> {
@@ -76,6 +77,7 @@ export class PostgresResultRepository implements ResultRepository {
 
   async storeResult(
     jobId: string,
+    requestFingerprint: string,
     snapshotSha256: string,
     result: VerificationResultMessage,
   ): Promise<StoredResult> {
@@ -84,11 +86,19 @@ export class PostgresResultRepository implements ResultRepository {
       await client.query("BEGIN");
       const inserted = await client.query<InsertedInboxRow>(
         `INSERT INTO audit_worker.inbox
-           (job_id, snapshot_sha256, result_id, result_payload, completed_at)
-         VALUES ($1, $2, $3, $4::jsonb, $5::timestamptz)
+           (job_id, request_fingerprint, fingerprint_version, snapshot_sha256,
+            result_id, result_payload, completed_at)
+         VALUES ($1, $2, 1, $3, $4, $5::jsonb, $6::timestamptz)
          ON CONFLICT (job_id) DO NOTHING
          RETURNING job_id`,
-        [jobId, snapshotSha256, result.resultId, JSON.stringify(result), result.completedAt],
+        [
+          jobId,
+          requestFingerprint,
+          snapshotSha256,
+          result.resultId,
+          JSON.stringify(result),
+          result.completedAt,
+        ],
       );
 
       if (inserted.rows[0] !== undefined) {
@@ -98,7 +108,7 @@ export class PostgresResultRepository implements ResultRepository {
       }
 
       const existing = await client.query<InboxRow>(
-        `SELECT snapshot_sha256, result_payload
+        `SELECT request_fingerprint, fingerprint_version, result_payload
            FROM audit_worker.inbox
           WHERE job_id = $1
           FOR UPDATE`,
@@ -108,7 +118,7 @@ export class PostgresResultRepository implements ResultRepository {
       if (row === undefined) {
         throw new Error("idempotency row disappeared during result storage");
       }
-      if (row.snapshot_sha256 !== snapshotSha256) {
+      if (row.fingerprint_version !== 1 || row.request_fingerprint !== requestFingerprint) {
         throw new IdempotencyConflictError(jobId);
       }
 

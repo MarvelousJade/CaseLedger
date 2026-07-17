@@ -7,6 +7,7 @@ using CaseLedger.Api.GraphQL;
 using CaseLedger.Api.Messaging;
 using CaseLedger.Api.Realtime;
 using CaseLedger.Api.Services;
+using CaseLedger.Api.Webhooks;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
@@ -83,8 +84,12 @@ builder.Services.AddSingleton<PasswordService>();
 builder.Services.AddScoped<AuditChainService>();
 builder.Services.Configure<MessagingOptions>(
     builder.Configuration.GetSection(MessagingOptions.SectionName));
+builder.Services.Configure<WebhookOptions>(
+    builder.Configuration.GetSection(WebhookOptions.SectionName));
 builder.Services.AddScoped<AuditVerificationScheduler>();
 builder.Services.AddScoped<AuditVerificationResultHandler>();
+builder.Services.AddScoped<IAuditVerificationResultApplier>(
+    services => services.GetRequiredService<AuditVerificationResultHandler>());
 builder.Services.AddSingleton<IVerificationUpdateNotifier, SignalRVerificationUpdateNotifier>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSignalR();
@@ -96,22 +101,45 @@ var messagingOptions = builder.Configuration
 if (messagingOptions.Enabled &&
     !builder.Environment.IsEnvironment("Testing"))
 {
-    if (!string.Equals(
-            messagingOptions.Provider,
-            "RabbitMq",
-            StringComparison.OrdinalIgnoreCase))
-    {
-        throw new InvalidOperationException(
-            "Messaging:Provider must be RabbitMq when messaging is enabled.");
-    }
-
-    _ = RabbitMqConnectionFactory.Create(messagingOptions);
-    builder.Services.AddSingleton<RabbitMqOutboxTransport>();
-    builder.Services.AddSingleton<IOutboxTransport>(
-        services => services.GetRequiredService<RabbitMqOutboxTransport>());
+    var messagingProvider = MessagingRuntimeOptions.Validate(messagingOptions);
     builder.Services.AddScoped<OutboxDispatchProcessor>();
     builder.Services.AddHostedService<OutboxDispatcherHostedService>();
-    builder.Services.AddHostedService<RabbitMqAuditResultConsumer>();
+
+    if (messagingProvider == MessagingProviderKind.RabbitMq)
+    {
+        builder.Services.AddSingleton<RabbitMqOutboxTransport>();
+        builder.Services.AddSingleton<IOutboxTransport>(
+            services => services.GetRequiredService<RabbitMqOutboxTransport>());
+        builder.Services.AddHostedService<RabbitMqAuditResultConsumer>();
+    }
+    else
+    {
+        builder.Services
+            .AddSingleton<IAzureServiceBusMessageSender, AzureServiceBusSdkMessageSender>();
+        builder.Services.AddSingleton<AzureServiceBusOutboxTransport>();
+        builder.Services.AddSingleton<IOutboxTransport>(
+            services => services.GetRequiredService<AzureServiceBusOutboxTransport>());
+        builder.Services.AddScoped<AzureServiceBusResultDeliveryProcessor>();
+        builder.Services.AddHostedService<AzureServiceBusAuditResultConsumer>();
+    }
+}
+
+var webhookOptions = builder.Configuration
+    .GetSection(WebhookOptions.SectionName)
+    .Get<WebhookOptions>() ?? new WebhookOptions();
+if (webhookOptions.Enabled &&
+    !builder.Environment.IsEnvironment("Testing"))
+{
+    _ = WebhookRuntimeOptions.Validate(webhookOptions);
+    builder.Services
+        .AddHttpClient("CaseLedger.Webhook")
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+        {
+            AllowAutoRedirect = false
+        });
+    builder.Services.AddSingleton<IWebhookTransport, HttpWebhookTransport>();
+    builder.Services.AddScoped<WebhookDispatchProcessor>();
+    builder.Services.AddHostedService<WebhookDispatcherHostedService>();
 }
 
 builder.Services.AddRateLimiter(options =>

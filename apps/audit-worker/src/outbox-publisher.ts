@@ -1,6 +1,10 @@
 import type { Logger } from "./logger.ts";
-import type { RabbitTransportPublisher } from "./rabbit-publisher.ts";
+import type { VerificationResultMessage } from "./contracts.ts";
 import type { PostgresResultRepository } from "./repository.ts";
+
+export interface ResultPublisher {
+  publishResult(result: VerificationResultMessage): Promise<void>;
+}
 
 export interface OutboxPublisherOptions {
   batchSize: number;
@@ -11,13 +15,13 @@ export interface OutboxPublisherOptions {
 
 export class ResultOutboxPublisher {
   private readonly repository: PostgresResultRepository;
-  private readonly publisher: RabbitTransportPublisher;
+  private readonly publisher: ResultPublisher;
   private readonly logger: Logger;
   private readonly options: OutboxPublisherOptions;
 
   constructor(
     repository: PostgresResultRepository,
-    publisher: RabbitTransportPublisher,
+    publisher: ResultPublisher,
     logger: Logger,
     options: OutboxPublisherOptions,
   ) {
