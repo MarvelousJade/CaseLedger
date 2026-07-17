@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
+using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddCaseLedgerObservability();
@@ -53,8 +54,17 @@ builder.Services.AddDbContext<CaseLedgerDbContext>(options =>
 {
     if (databaseProvider.Equals("PostgreSQL", StringComparison.OrdinalIgnoreCase))
     {
-        options.UseNpgsql(connectionString ?? throw new InvalidOperationException(
-            "ConnectionStrings:CaseLedger is required when Database:Provider is PostgreSQL."));
+        var postgresConnection = new NpgsqlConnectionStringBuilder(
+            connectionString ?? throw new InvalidOperationException(
+                "ConnectionStrings:CaseLedger is required when Database:Provider is PostgreSQL."));
+
+        if (postgresConnection.GssEncryptionMode == GssEncryptionMode.Prefer)
+        {
+            // Hosted deployments use TLS, not Kerberos. Avoid probing for GSS libraries on Alpine.
+            postgresConnection.GssEncryptionMode = GssEncryptionMode.Disable;
+        }
+
+        options.UseNpgsql(postgresConnection.ConnectionString);
     }
     else if (databaseProvider.Equals("Sqlite", StringComparison.OrdinalIgnoreCase))
     {
