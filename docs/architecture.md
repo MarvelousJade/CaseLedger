@@ -1,234 +1,233 @@
 # CaseLedger architecture
 
-## Goals
+## Goals and boundaries
 
-CaseLedger is designed as a portfolio-sized system with production-minded boundaries. It should start with one command, show meaningful seeded state, exercise multiple API styles for defensible reasons, and make integrity behavior testable without pretending that a hash chain is a blockchain.
+CaseLedger keeps case commands, authorization, audit creation, and persistence in the ASP.NET Core
+API while making audit verification independently executable and operationally observable.
 
 Primary goals:
 
-- Keep commands, validation, and persistence in the ASP.NET Core service.
-- Give the React client a focused workflow rather than exposing database-shaped forms.
-- Preserve an append-only account of every case mutation.
-- Allow a second implementation to verify exported history independently.
-- Reject lost updates with explicit HTTP preconditions.
-- Expose operational signals without placing case content in telemetry.
-- Run locally without infrastructure while retaining a PostgreSQL deployment path.
+- preserve an append-only, tamper-evident event chain for every case mutation;
+- reject lost updates with strong HTTP preconditions;
+- support zero-infrastructure SQLite development and a PostgreSQL deployment path;
+- queue immutable verification snapshots without a database/broker dual-write;
+- process broker messages safely under at-least-once delivery;
+- surface terminal results through SignalR with polling as a recovery path;
+- send an optional, signed, privacy-minimal completion webhook;
+- keep broker credentials, webhook secrets, request bodies, and case content out of telemetry.
 
-Non-goals include file-content storage, public registration, real-time collaboration, external
-notifications, distributed services, and a production monitoring backend.
+Non-goals are evidence-byte storage, public registration, arbitrary user-configured webhook targets,
+an exactly-once delivery claim, automatic Azure resource provisioning, and a production monitoring
+backend.
 
 ## Runtime components
 
+```mermaid
+flowchart LR
+    UI[React client]
+    API[ASP.NET Core API]
+    ApiDb[(API database)]
+    Broker{RabbitMQ or<br/>Azure Service Bus}
+    Worker[TypeScript audit worker]
+    WorkerDb[(PostgreSQL<br/>audit_worker schema)]
+    Hook[Fixed webhook destination]
+
+    UI -->|REST + GraphQL| API
+    API -->|case + verification job + request outbox| ApiDb
+    ApiDb -->|request outbox dispatcher| Broker
+    Broker -->|requested.v1| Worker
+    Worker -->|inbox + result outbox transaction| WorkerDb
+    WorkerDb -->|result publisher| Broker
+    Broker -->|result.v1| API
+    API -->|idempotent job update + webhook row| ApiDb
+    API -->|SignalR; polling fallback| UI
+    ApiDb -->|webhook dispatcher| Hook
+```
+
 ### React client
 
-The TypeScript client owns presentation state, accessible interactions, search/filter controls, and browser-side SHA-256 calculation for selected evidence. It calls REST for commands and details, then issues one GraphQL query for the overview.
+The React 19/TypeScript client uses REST for commands and case details and one GraphQL query for
+dashboard aggregation. It computes evidence SHA-256 digests in the browser and sends metadata, not
+file bytes.
 
-The development server proxies `/api` and `/graphql` to the API. In the container image, the compiled SPA is copied into the API's `wwwroot` directory and served from the same origin.
-
-Vitest runs the client component suite in jsdom with React Testing Library and `user-event`.
-The tests drive controls through their accessible names and cover login outcomes, dialog focus and
-Escape behavior, case creation, dashboard failure recovery, server pagination, strong ETag headers,
-and stale-update handling.
+When asynchronous messaging is enabled, **Verify now** creates a verification job. The client joins
+the authenticated `/hubs/cases` SignalR group for that case and reloads the job after a
+`VerificationUpdated` event. A pending job is also polled every two seconds, so a missed or
+unavailable real-time connection does not strand the interface. If queuing returns `503` because
+messaging is disabled, the client calls the synchronous `/audit/verify` endpoint instead.
 
 ### ASP.NET Core API
 
-The API owns:
+The API owns cookie sessions and role claims, Problem Details responses, case validation and ETag
+preconditions, EF Core persistence, audit creation, GraphQL dashboard aggregation, OpenAPI,
+structured logs, and OpenTelemetry instrumentation.
 
-- HTTP-only cookie sessions and role claims
-- request validation and Problem Details responses
-- OpenAPI JSON at `/swagger/v1/swagger.json` and Swagger UI at `/swagger`
-- case reference allocation and domain transitions
-- page-based list projections and strong ETag preconditions
-- EF Core persistence
-- canonical audit event creation
-- audit verification and administrator-only export
-- dashboard aggregation through GraphQL
-- structured JSON logs and OpenTelemetry instrumentation
+`POST /api/cases/{id}/audit/verifications` builds a strictly shaped, immutable v1 snapshot and stages both an
+`AuditVerificationJob` and its `OutboxMessage`. The endpoint calls `SaveChanges` once, so the job and
+publish intent commit atomically. A background dispatcher leases pending outbox rows and publishes
+through the configured broker provider.
 
-REST endpoints use minimal API route groups. The focused GraphQL query is a separate read model rather than a second mutation surface.
+The result consumer validates the v1 contract, job identity, case identity, verification profile,
+and snapshot digest. Applying the first terminal result updates the job and, when enabled, stages
+one `WebhookDelivery` in the same database transaction. A repeated matching `resultId` is treated as
+a duplicate; a conflicting result is rejected.
 
-### Relational database
+### Relational persistence
 
-SQLite is the default provider because it makes the first run deterministic and requires no external process. Setting `Database__Provider=PostgreSQL` and `ConnectionStrings__CaseLedger` selects Npgsql instead. Both providers use the same EF Core model.
+SQLite is the zero-configuration API default. `Database__Provider=PostgreSQL` selects Npgsql and
+checked-in migrations. The Compose and E2E stacks use PostgreSQL 17.
 
-Core relationships:
+Important persistence invariants include:
 
-```mermaid
-erDiagram
-    USER ||--o{ CASE_RECORD : creates
-    USER ||--o{ CASE_RECORD : assigned
-    CASE_RECORD ||--o{ EVIDENCE : contains
-    CASE_RECORD ||--o{ AUDIT_EVENT : records
-    USER ||--o{ EVIDENCE : adds
-    USER ||--o{ AUDIT_EVENT : acts
+- unique case references and `(CaseId, Sequence)` audit positions;
+- application-managed GUID case versions for strong ETags;
+- immutable tracked `AuditEvent` rows;
+- unique terminal verification `ResultId` values;
+- one webhook delivery per verification job and result;
+- leased API outbox and webhook rows for safe concurrent dispatch;
+- a separate worker-owned `audit_worker` PostgreSQL schema.
 
-    USER {
-      uuid id PK
-      string email UK
-      string role
-      string passwordHash
-    }
-    CASE_RECORD {
-      uuid id PK
-      uuid version "concurrency token"
-      string reference UK
-      string status
-      string severity
-      uuid createdById FK
-      uuid assigneeId FK
-    }
-    EVIDENCE {
-      uuid id PK
-      uuid caseId FK
-      string fileName
-      long sizeBytes
-      string sha256
-    }
-    AUDIT_EVENT {
-      uuid id PK
-      uuid caseId FK
-      int sequence UK
-      string previousHash
-      string hash
-      text canonicalData
-    }
+The worker transaction inserts a `jobId` inbox row and deterministic result-outbox row together.
+The inbox stores a versioned fingerprint of the full immutable request, the separate projection
+digest returned to the API, and the cached terminal result. Repeating the same request reuses that
+result; reusing the ID with any different intent or content is dead-lettered. Rows created before
+the full-request fingerprint migration fail closed on reuse.
+
+### TypeScript audit worker
+
+The Node.js 24 worker validates the strict request schema, verifies the event projection with the
+independent audit-verifier library, and persists a terminal result before acknowledging the request.
+Its health endpoint reports database readiness, broker readiness, and the selected provider.
+
+Invalid JSON, invalid contracts, oversize messages, and idempotency conflicts are terminal and go
+directly to a dead-letter destination. Infrastructure failures use 5-second, 30-second, and
+5-minute retry tiers. After those tiers are exhausted, the worker stores a deterministic terminal
+error in its result outbox before dead-lettering the request.
+
+### Broker providers
+
+RabbitMQ is the local and E2E default. Durable exchanges and queues carry request, retry, result,
+and dead-letter traffic. Requests use manual acknowledgements; results use publisher confirms and
+the durable worker outbox.
+
+Azure Service Bus is an implemented provider, but no Azure environment is deployed by this
+repository. An operator must provision:
+
+1. one topic shared by request, retry, and result messages;
+2. a worker request subscription whose correlation rule matches `Subject` to
+   `caseledger.audit.verification.requested.v1` (SQL equivalent:
+   `sys.Label = 'caseledger.audit.verification.requested.v1'`);
+3. an API result subscription whose correlation rule matches `Subject` to
+   `caseledger.audit.verification.result.v1` (SQL equivalent:
+   `sys.Label = 'caseledger.audit.verification.result.v1'`).
+
+The subscriptions must not retain an unfiltered default rule. Both consumers use PeekLock with
+automatic completion disabled. Valid work is completed explicitly, rejected contracts are
+dead-lettered with sanitized reasons, and infrastructure failures are abandoned. Worker retries are
+scheduled topic messages with a unique broker message ID per attempt while the application `jobId`
+remains stable.
+
+Provider selection is configuration-only. The API reads `Messaging__Provider` and its provider
+section; the worker reads `BROKER_PROVIDER` and the corresponding broker variables. Connection
+values belong in the deployment platform's secret store and must not be committed.
+
+### Signed outbound webhook
+
+Webhooks have one operator-configured destination; case users cannot supply a target URL. The API
+stores the exact UTF-8 JSON body before dispatch and sends these headers:
+
+- `X-CaseLedger-Delivery`
+- `X-CaseLedger-Event`
+- `X-CaseLedger-Timestamp`
+- `X-CaseLedger-Signature`
+- `Idempotency-Key`
+
+The signature is a lowercase HMAC-SHA256 over `timestamp + "." + rawBody`, prefixed with `v1=`.
+Receivers should verify the raw bytes, reject stale timestamps, and deduplicate by delivery ID.
+
+The payload contains only `deliveryId`, `resultId`, `jobId`, `caseId`, `status`, `valid`,
+`checkedEvents`, `brokenAt`, `chainHead`, `errorCode`, and `completedAt`. It does not include case
+titles, descriptions, evidence metadata, actors, credentials, or the audit snapshot. A 2xx response
+completes delivery. Network failures, timeouts, 408, 429, and 5xx responses retry with bounded
+exponential delay; other 4xx responses and exhausted attempts are terminal. Redirects are disabled,
+and response bodies are not read or stored.
+
+## Audit integrity
+
+Every mutation appends an event with a deterministic canonical payload:
+
+```text
+hash = SHA-256(previousHash + "\n" + canonicalData)
+genesis previousHash = 64 zeroes
 ```
 
-A unique `(CaseId, Sequence)` index prevents duplicate positions, and a unique case reference index protects human-readable identifiers.
+The event records its ID, case ID, sequence, type, description, actor identity, UTC timestamp,
+previous hash, hash, and canonical data. PostgreSQL timestamps are normalized to microsecond
+precision before canonicalization so hashes survive database round trips.
 
-`CaseRecord.Version` is an application-managed GUID concurrency token. EF Core assigns a new GUID
-on every tracked case update. REST list/detail representations expose it, while creates and detail
-responses also publish it as a strong ETag.
+Synchronous and worker verification both check contiguous sequences, the genesis link, every later
+link, every stored hash, and agreement between visible event columns and canonical data. The worker
+request also carries a framed SHA-256 digest over the complete visible projection. This detects a
+direct edit to fields such as `Description`, not only edits to stored hash columns.
 
-### Node.js verifier
+The chain is tamper-evident, not an external trust anchor. A database administrator able to rewrite
+the entire chain could recompute it. A stronger deployment would periodically sign or publish chain
+heads to independently controlled storage.
 
-The verifier has no runtime dependencies and never contacts the API. It accepts either an export envelope or a raw event array, supports camelCase and PascalCase property names, and exits nonzero on invalid input or tampering. Keeping this verifier independent reduces the chance that verification merely repeats a shared implementation bug.
+## Delivery semantics
 
-### Observability pipeline
+Delivery is intentionally at least once across each network boundary:
 
-The API writes UTC JSON console logs with trace and span correlation. ASP.NET Core, outbound HTTP,
-runtime, and CaseLedger business instrumentation produce traces and metrics under the
-`CaseLedger.Api` source and meter. Business signals use bounded labels such as severity, media type
-group, audit event type, and verification result.
+| Boundary | Durable state | Duplicate protection | Failure path |
+| --- | --- | --- | --- |
+| API to broker | API request outbox | message/job ID | exponential publish retry, then outbox dead-letter state |
+| Broker to worker | worker inbox | `jobId` plus versioned full-request fingerprint | three retry tiers, then broker DLQ and terminal error result |
+| Worker to broker | worker result outbox | deterministic `resultId` | leased exponential publish retry |
+| Broker to API | verification job | validated `resultId` and result fields | invalid result DLQ; infrastructure requeue/abandon |
+| API to webhook | webhook delivery outbox | delivery ID and unique job/result indexes | retryable status policy, then webhook dead-letter state |
 
-```mermaid
-flowchart LR
-    API[ASP.NET Core API]
-    Console[JSON console logs]
-    OTLP[OTLP exporter]
-    Backend[Local OTel LGTM backend]
-    Grafana[Grafana dashboard]
+Exactly-once side effects are not assumed. A process can publish successfully and stop before
+marking its outbox row, so every downstream consumer must remain idempotent.
 
-    API --> Console
-    API -. conditional traces, metrics, and logs .-> OTLP
-    OTLP --> Backend
-    Backend --> Grafana
-```
+## Authentication, telemetry, and privacy
 
-The OTLP trace, metric, and log exporters are registered only when
-`OTEL_EXPORTER_OTLP_ENDPOINT` is set. Without it, structured console logging remains active and no
-remote export is attempted. `compose.observability.yaml` supplies a loopback-only local collector
-and Grafana instance for development and demonstrations; it is not a production retention,
-authentication, TLS, or alerting design.
+Passwords use PBKDF2-SHA256 with fixed-time verification. Successful login creates an eight-hour,
+HTTP-only, same-site cookie. Both seeded roles can perform case work; audit export requires `Admin`.
+The seeded identity model is for demonstration, not production account lifecycle management.
 
-Telemetry contains case/evidence identifiers, bounded categories, counts, sizes, and timings. It
-does not contain evidence filenames, user email addresses, passwords, cookies, authorization
-secrets, request bodies, or uploaded file content.
+The API always emits UTC structured console logs. OTLP trace, metric, and log export is registered
+only when `OTEL_EXPORTER_OTLP_ENDPOINT` is present. Telemetry uses bounded operational attributes
+and excludes evidence filenames, user email addresses, passwords, cookies, broker/webhook secrets,
+message bodies, and uploaded content.
 
-## Mutation and audit sequence
+## Deployment modes
 
-```mermaid
-sequenceDiagram
-    participant UI as React client
-    participant API as REST endpoint
-    participant Audit as AuditChainService
-    participant DB as EF Core database
-
-    UI->>API: PATCH command + If-Match: "version"
-    API->>DB: Load actor and current case version
-    alt Missing, malformed, or stale precondition
-        API-->>UI: 428, 400, or 412 Problem Details
-    else Current strong ETag
-        API->>API: Apply domain change
-        API->>Audit: Append event + normalized data
-        Audit->>DB: Read current chain head
-        Audit->>Audit: Build canonicalData
-        Audit->>Audit: SHA-256(previousHash + newline + canonicalData)
-        Audit->>DB: Stage immutable AuditEvent
-        API->>DB: Save mutation and event together
-        DB-->>API: Commit
-        API-->>UI: Updated projection + new version/ETag
-    end
-```
-
-The first event uses 64 zeroes as its previous hash. Subsequent events use the exact lowercase hash of the preceding event. Canonical JSON contains version, event ID, case ID, sequence, event type, description, actor identity, UTC timestamp, and sorted event-specific data.
-
-Creates do not require a precondition; they return the initial version and ETag. PostgreSQL
-`timestamp with time zone` persists microsecond precision, while .NET `DateTime` can represent
-100-nanosecond ticks. Before canonical JSON is created or an audit event is persisted, CaseLedger
-converts the timestamp to UTC and truncates sub-microsecond ticks. Verification formats the stored
-value through the same normalization. This keeps canonical hashes stable across SQLite and
-PostgreSQL round trips rather than hashing precision the deployment database cannot retain.
-
-Verification checks:
-
-1. sequences are contiguous from one;
-2. the first previous hash is the genesis value;
-3. each later previous hash equals the prior event hash;
-4. every stored hash matches a fresh calculation;
-5. canonical fields still match the visible event columns.
-
-`CaseLedgerDbContext` rejects tracked audit updates and deletes. The tampering integration test bypasses that guard with direct SQL, proving that verification detects storage-level modification.
-
-## Authentication and authorization
-
-Passwords are stored as PBKDF2-SHA256 hashes with 120,000 iterations and fixed-time verification. A successful login creates an eight-hour, HTTP-only, same-site cookie. API authentication handlers return JSON Problem Details instead of browser redirects.
-
-Both seeded roles can perform standard case work. Audit export is restricted to the `Admin` role; integration tests assert that an analyst receives HTTP 403.
-
-This is intentionally a demonstration identity boundary. A production deployment should use a managed identity provider, add anti-forgery protection for cookie-authenticated mutations, require HTTPS-only cookies, rotate secrets, and implement account lifecycle policies.
-
-## Integrity trust boundary
-
-The chain makes accidental corruption and partial history edits visible. It does not stop a privileged database operator from rewriting every event and recomputing every later hash. Stronger deployments would sign or publish periodic chain heads to an independently controlled store.
-
-Evidence handling has a similar explicit boundary. The browser calculates a file digest, but the service receives only the digest and metadata. A trusted production collector should hash content again server-side before durable object storage.
-
-## Failure handling
-
-- Invalid requests return field-level validation details.
-- Case-list paging returns stable page, page-size, total-page, and next/previous metadata.
-- A missing update precondition returns 428; malformed or weak ETags return 400; stale versions return 412 with the current ETag.
-- After a 412, the React client reports the conflict and reloads the current case without retrying the mutation.
-- Missing cases return a 404 Problem Details document.
-- Unauthenticated and unauthorized requests return 401 and 403 JSON responses.
-- UI requests preserve loading, empty, error, and retry states.
-- The dashboard falls back to a REST rollup if GraphQL is unavailable.
-- The verifier reports the first invalid event and returns a nonzero status.
+| Mode | Database | Messaging/webhook behavior |
+| --- | --- | --- |
+| `npm run dev` | SQLite | Disabled by default; UI uses synchronous verification fallback |
+| Docker Compose | PostgreSQL | RabbitMQ worker and signed local webhook receiver enabled |
+| Render demo | Neon PostgreSQL | Disabled by default; UI keeps synchronous fallback |
+| Azure-ready configuration | PostgreSQL | Service Bus provider available after operator provisioning; not deployed here |
 
 ## Test strategy
 
-The test layers have deliberately different scopes:
+1. Vitest and React Testing Library cover accessible client workflows, API parsing, SignalR
+   reconnection/subscription, two-second polling, and synchronous fallback behavior.
+2. API integration tests cover lifecycle commands, ETags, OpenAPI, authorization, audit tampering,
+   transactional scheduling/outbox behavior, RabbitMQ and Service Bus result handling, idempotent
+   result application, SignalR notification, and webhook signing/retry decisions.
+3. Worker tests cover strict contracts, cross-runtime snapshot digests, durable inbox/outbox
+   behavior, RabbitMQ topology, Service Bus settlement and scheduled retries, idempotency conflicts,
+   retry exhaustion, and health state.
+4. Playwright uses disposable PostgreSQL, RabbitMQ, API, worker, and webhook-receiver containers. It
+   covers a successful distributed workflow, direct audit-row tampering, duplicate request/result
+   replay without duplicate state or webhook delivery, and dead-lettering an invalid request.
 
-1. Vitest and React Testing Library exercise client behavior in jsdom, including accessible
-   interactions, request headers, filters, paging, error recovery, and optimistic-concurrency UI.
-2. API tests start the real ASP.NET Core application with an isolated SQLite file and exercise
-   authentication, lifecycle commands, pagination metadata, OpenAPI, ETags, authorization,
-   telemetry label hygiene, GraphQL, tracked immutability, timestamp precision, and raw SQL
-   tampering through HTTP and the service boundary.
-3. Node.js tests independently cover valid audit envelopes, PascalCase input, content changes,
-   broken links, sequence changes, and CLI exit codes.
-4. Playwright builds the production container and starts a disposable PostgreSQL 17 stack. It
-   drives analyst login, case creation, evidence hashing/registration, successful verification,
-   direct database tampering, and verification failure through a real Chromium browser.
+`npm run check` runs the fast layers; `npm run test:e2e` runs the Docker-backed browser and
+resilience suite.
 
-`npm run check` runs the first three fast layers (plus lint and production builds). CI runs that
-verification job first, then runs the Docker/PostgreSQL Playwright workflows in a dependent E2E
-job. Locally, the browser layer remains an explicit `npm run test:e2e` command because it requires
-Docker and Chromium.
+## Decisions
 
-## Production evolution
-
-The next practical steps would be external identity, anti-forgery protection, server-side evidence
-ingestion, signed chain-head anchoring, cursor pagination for very large datasets, managed telemetry
-storage with access control and retention policies, alerting, and deeper deployment health checks.
+- [ADR 0001: Durable asynchronous audit verification](adr/0001-durable-audit-verification.md)
+- [ADR 0002: Broker provider boundary](adr/0002-broker-provider-boundary.md)
+- [ADR 0003: Fixed signed completion webhook](adr/0003-fixed-signed-webhook.md)

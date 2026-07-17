@@ -1,6 +1,6 @@
 # CaseLedger
 
-CaseLedger is a collaborative case and evidence workspace with a tamper-evident activity trail. It combines a responsive React interface, an ASP.NET Core API, REST commands, a GraphQL dashboard, relational persistence, and an independent Node.js audit verifier.
+CaseLedger is a collaborative case and evidence workspace with a tamper-evident activity trail. It combines a responsive React interface, an ASP.NET Core API, REST commands, a GraphQL dashboard, relational persistence, and a durable TypeScript audit-verification worker.
 
 ## Live demo
 
@@ -11,7 +11,7 @@ Sign in with the shared analyst account:
 - Email: `analyst@caseledger.dev`
 - Password: `Analyst123!`
 
-The free Render service may take about a minute to wake after inactivity. The hosted administrator credential remains private.
+The free Render service may take about a minute to wake after inactivity. The hosted administrator credential remains private. Messaging and outbound webhooks are disabled on Render, so its interface uses the synchronous verification fallback.
 
 ![CaseLedger dashboard](docs/screenshots/dashboard.png)
 
@@ -24,7 +24,13 @@ The free Render service may take about a minute to wake after inactivity. The ho
 - Page-based case queries and strong ETag optimistic concurrency for updates
 - SHA-256 chained audit events with immutable tracked history
 - Browser-side evidence hashing without retaining uploaded file contents
-- An independent, dependency-free Node.js 24 audit verifier
+- Transactional verification jobs and request outbox records in the ASP.NET database
+- RabbitMQ locally or an Azure Service Bus provider for hosted asynchronous verification
+- A TypeScript worker with a durable PostgreSQL inbox and result outbox
+- At-least-once delivery with idempotency checks, retry tiers, and dead-letter handling
+- SignalR verification updates with a two-second polling fallback
+- Signed, retryable outbound verification webhooks with a privacy-minimal payload
+- An independent, dependency-free Node.js 24 audit-verifier library and CLI
 - Vitest, React Testing Library, and jsdom component tests for client workflows and accessible interactions
 - OpenAPI documentation plus OpenTelemetry traces, metrics, and structured JSON logs
 - API integration and Playwright browser tests covering real workflows, PostgreSQL, and deliberate audit tampering
@@ -46,7 +52,8 @@ npm run dev
 Open `http://localhost:5173`. The API listens on `http://localhost:5150`; its Swagger UI is at
 `http://localhost:5150/swagger`, and the OpenAPI JSON document is at
 `http://localhost:5150/swagger/v1/swagger.json`. The first run creates and seeds a local SQLite
-database automatically.
+database automatically. This lightweight development mode leaves messaging and webhooks disabled;
+clicking **Verify now** falls back to in-process verification when the queue endpoint returns `503`.
 
 | Role | Email | Password | Access |
 | --- | --- | --- | --- |
@@ -61,7 +68,7 @@ These accounts are deterministic demonstration credentials, not a production ide
 2. Search, filter, create, assign, and update cases.
 3. Add comments that become immutable activity events.
 4. Register evidence metadata after the browser computes its SHA-256 digest.
-5. Verify an individual case's complete activity chain.
+5. Verify an individual case's complete activity chain synchronously or through the durable worker.
 6. Export an audit chain as an administrator and verify it independently with Node.js.
 
 ![Case detail and integrity verification](docs/screenshots/case-detail.png)
@@ -76,24 +83,32 @@ These accounts are deterministic demonstration credentials, not a production ide
 flowchart LR
     Browser[React + TypeScript SPA]
     API[ASP.NET Core API]
-    Audit[Audit chain service]
-    Data[(SQLite or PostgreSQL)]
-    Verify[Node.js verifier]
-    Observability[OTel backend + Grafana]
-    Logs[Structured JSON logs]
+    Data[(API database)]
+    Broker{RabbitMQ or<br/>Azure Service Bus}
+    Worker[TypeScript audit worker]
+    WorkerData[(Worker inbox +<br/>result outbox)]
+    Webhook[Fixed webhook destination]
 
     Browser -->|REST commands| API
     Browser -->|GraphQL dashboard| API
     Browser -->|SHA-256 evidence metadata| API
-    API --> Audit
-    API -->|EF Core| Data
-    Audit --> Data
-    Data -->|Admin JSON export| Verify
-    API -. conditional OTLP export .-> Observability
-    API --> Logs
+    API -->|case + job + request outbox| Data
+    Data -->|outbox dispatch| Broker
+    Broker -->|immutable v1 snapshot| Worker
+    Worker --> WorkerData
+    WorkerData -->|terminal result| Broker
+    Broker -->|idempotent result apply| API
+    API -->|SignalR; polling fallback| Browser
+    API -->|signed delivery outbox| Webhook
 ```
 
 REST owns mutations and detailed case reads. GraphQL has one focused purpose: assembling dashboard counts, recent cases, and the workspace integrity signal. This keeps the two API styles justified instead of duplicating the same surface.
+
+Creating a queued verification writes the job and its immutable request snapshot to the API database
+in one transaction. The worker stores each `jobId` and result atomically in its own PostgreSQL
+inbox/outbox. Broker delivery is at least once: a versioned full-request fingerprint and deterministic
+result IDs make duplicate requests and results safe, while conflicting reuse is rejected. RabbitMQ is the Compose default;
+Azure Service Bus is implemented as an alternative provider but is not deployed by this repository.
 
 ### Audit chain
 
@@ -122,7 +137,11 @@ See [architecture.md](docs/architecture.md) for the data model, trust boundary, 
 | `POST` | `/api/cases/{id}/evidence` | Register evidence metadata and digest |
 | `GET` | `/api/cases/{id}/audit` | Read the activity chain |
 | `GET` | `/api/cases/{id}/audit/verify` | Recalculate and verify the chain |
+| `POST` | `/api/cases/{id}/audit/verifications` | Queue an immutable verification snapshot |
+| `GET` | `/api/cases/{id}/audit/verifications/latest` | Read the latest queued or terminal job |
+| `GET` | `/api/cases/{id}/audit/verifications/{jobId}` | Read one verification job |
 | `GET` | `/api/cases/{id}/audit/export` | Export a chain; administrators only |
+| SignalR | `/hubs/cases` | Authenticated case-verification updates |
 | `POST` | `/graphql` | Query dashboard aggregates |
 | `GET` | `/health` | Anonymous health probe |
 | `GET` | `/swagger` | Interactive Swagger UI |
@@ -189,6 +208,7 @@ Install dependencies once, then run the fast repository checks:
 ```powershell
 npm ci
 npm ci --prefix apps/web
+npm ci --prefix apps/audit-worker
 npm run check
 ```
 
@@ -197,53 +217,61 @@ That single command runs:
 - TypeScript lint and a production frontend build
 - Vitest/React Testing Library component and API-client tests in jsdom
 - .NET build plus API contract, lifecycle, telemetry, rate-limiting, and tampering tests
-- Independent Node.js verifier tests
+- TypeScript worker contract, durability, RabbitMQ, and Azure Service Bus tests
+- Independent Node.js verifier tests and signed webhook-receiver tests
 
 The Docker-backed browser workflows are intentionally a separate command because they build the
-application image and start a disposable PostgreSQL stack:
+API and worker images and start a disposable PostgreSQL/RabbitMQ stack:
 
 ```powershell
 npx playwright install chromium
 npm run test:e2e
 ```
 
-Those Playwright tests exercise analyst login, case creation, browser-side evidence hashing, and
-verification before and after a direct PostgreSQL audit-row modification. See
+Those Playwright tests exercise analyst login, case creation, browser-side evidence hashing,
+asynchronous verification, direct PostgreSQL tampering, duplicate request/result replay,
+dead-letter handling for an invalid message, and one signed webhook delivery. See
 [operations.md](docs/operations.md) for the local E2E and observability commands.
-CI runs the fast verification job first and then these Docker/PostgreSQL browser workflows in a
+CI runs the fast verification job first and then these Docker-backed browser workflows in a
 dependent E2E job.
 
 ## Container deployment
 
-Docker Compose builds the SPA and API into one application image and uses PostgreSQL:
+Docker Compose builds the API/SPA and audit-worker images, then starts PostgreSQL, RabbitMQ, and a
+local signed-webhook receiver:
 
 ```powershell
 Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Open `http://localhost:5150`. Docker remains optional; local development uses SQLite and requires no database service.
+Open `http://localhost:5150`. The stack also exposes RabbitMQ management at
+`http://localhost:15672`, worker health at `http://localhost:5152/health`, and webhook-receiver
+metadata at `http://localhost:5153/deliveries`. Docker remains optional; `npm run dev` uses SQLite
+and the synchronous verification fallback.
 
 For local traces, metrics, logs, and the provisioned Grafana dashboard, add the observability
 Compose overlay described in [operations.md](docs/operations.md). That stack is for development
 and demonstrations only; it is not a production monitoring deployment.
 
-The public demo runs on Render from an immutable GHCR image published after CI succeeds. Its PostgreSQL data is hosted by Neon.
+The public demo runs on Render from the checked-in Dockerfile after repository checks pass. Its PostgreSQL data is hosted by Neon. CI also publishes versioned API and worker images to GHCR. Messaging and webhooks remain disabled on Render unless an operator explicitly provisions and configures the required infrastructure.
 
 ## Repository layout
 
 ```text
 apps/
-  api/                  ASP.NET Core API, domain, persistence, GraphQL
+  api/                  ASP.NET Core API, persistence, outbox, SignalR, webhooks
+  audit-worker/         TypeScript verifier worker and PostgreSQL inbox/outbox
   web/                  React and TypeScript interface
 tests/api/              End-to-end API and tamper-detection tests
-tests/e2e/              Playwright workflows against disposable PostgreSQL
+tests/e2e/              PostgreSQL/RabbitMQ Playwright and resilience workflows
 tools/audit-verifier/   Independent Node.js verifier and tests
-docs/                   Architecture notes and screenshots
+tools/webhook-receiver/ Local signed-delivery test receiver
+docs/                   Architecture, operations, ADRs, and screenshots
 ops/observability/      Local Grafana dashboard provisioning
 .github/workflows/      CI and container image publishing
-compose.yaml            PostgreSQL deployment
-compose.e2e.yaml        Disposable PostgreSQL browser-test stack
+compose.yaml            PostgreSQL, RabbitMQ, API, worker, and webhook receiver
+compose.e2e.yaml        Disposable distributed browser-test stack
 compose.observability.yaml  Local OpenTelemetry/Grafana overlay
 Dockerfile              Multi-stage web/API image
 render.yaml             Render Blueprint configuration
@@ -255,6 +283,8 @@ render.yaml             Render Blueprint configuration
 - A hash chain is tamper-evident, not an external trust anchor. A database administrator who can rewrite the entire chain could recompute it; production hardening would periodically publish signed chain heads to separate storage.
 - SQLite uses `EnsureCreated` for zero-configuration local development; hosted PostgreSQL uses checked-in EF Core migrations.
 - Seeded cookie authentication keeps the workflow immediately testable. Production deployment would use an external identity provider, anti-forgery protection, secret management, and stricter cookie policy.
+- Broker and webhook delivery are at least once. Consumers use stable idempotency identifiers; an operator must monitor and replay dead-lettered work intentionally.
+- Azure Service Bus support is a configurable provider, not a claim that an Azure environment has been deployed.
 - Local telemetry deliberately records bounded operational attributes, identifiers, counts, and timings—not filenames, email addresses, request secrets, credentials, or uploaded content.
 
 ## License
