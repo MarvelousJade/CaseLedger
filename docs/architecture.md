@@ -8,17 +8,18 @@ API while making audit verification independently executable and operationally o
 Primary goals:
 
 - preserve an append-only, tamper-evident event chain for every case mutation;
+- retain uploaded evidence bytes behind generated object keys and compute their digest server-side;
 - reject lost updates with strong HTTP preconditions;
 - support zero-infrastructure SQLite development and a PostgreSQL deployment path;
 - queue immutable verification snapshots without a database/broker dual-write;
 - process broker messages safely under at-least-once delivery;
 - surface terminal results through SignalR with polling as a recovery path;
 - send an optional, signed, privacy-minimal completion webhook;
-- keep broker credentials, webhook secrets, request bodies, and case content out of telemetry.
+- keep broker credentials, webhook secrets, request bodies, evidence bytes, and case content out of telemetry.
 
-Non-goals are evidence-byte storage, public registration, arbitrary user-configured webhook targets,
-an exactly-once delivery claim, automatic Azure resource provisioning, and a production monitoring
-backend.
+Non-goals are evidence download and malware scanning, public registration, arbitrary
+user-configured webhook targets, an exactly-once delivery claim, automatic deployment without an
+operator-approved Azure subscription, and a production monitoring backend.
 
 ## Runtime components
 
@@ -27,12 +28,14 @@ flowchart LR
     UI[React client]
     API[ASP.NET Core API]
     ApiDb[(API database)]
+    Objects[(Local files or<br/>Azure Blob Storage)]
     Broker{RabbitMQ or<br/>Azure Service Bus}
     Worker[TypeScript audit worker]
     WorkerDb[(PostgreSQL<br/>audit_worker schema)]
     Hook[Fixed webhook destination]
 
-    UI -->|REST + GraphQL| API
+    UI -->|REST + GraphQL; multipart uploads| API
+    API -->|server hash + evidence bytes| Objects
     API -->|case + verification job + request outbox| ApiDb
     ApiDb -->|request outbox dispatcher| Broker
     Broker -->|requested.v1| Worker
@@ -47,8 +50,8 @@ flowchart LR
 ### React client
 
 The React 19/TypeScript client uses REST for commands and case details and one GraphQL query for
-dashboard aggregation. It computes evidence SHA-256 digests in the browser and sends metadata, not
-file bytes.
+dashboard aggregation. Evidence registration sends a multipart file upload; the browser does not
+provide the authoritative digest.
 
 When asynchronous messaging is enabled, **Verify now** creates a verification job. The client joins
 the authenticated `/hubs/cases` SignalR group for that case and reloads the job after a
@@ -61,6 +64,18 @@ messaging is disabled, the client calls the synchronous `/audit/verify` endpoint
 The API owns cookie sessions and role claims, Problem Details responses, case validation and ETag
 preconditions, EF Core persistence, audit creation, GraphQL dashboard aggregation, OpenAPI,
 structured logs, and OpenTelemetry instrumentation.
+
+Evidence uploads are streamed through a bounded temporary file while the API computes SHA-256 and
+the actual byte count. The API then writes the object before committing its evidence row and audit
+event. If the database operation fails, the staged object is removed. This is compensating cleanup,
+not a distributed transaction between the relational database and object store.
+
+The default provider writes beneath a configured local root with generated
+`cases/{caseId}/evidence/{evidenceId}.blob` paths and traversal checks. The Azure provider writes the
+equivalent generated key without the suffix to a private Blob container using
+`DefaultAzureCredential`; it records the digest and size as blob metadata and rejects an overwrite.
+Filenames never form an object key. Download, malware scanning, retention, and legal-hold workflows
+are outside the current surface.
 
 `POST /api/cases/{id}/audit/verifications` builds a strictly shaped, immutable v1 snapshot and stages both an
 `AuditVerificationJob` and its `OutboxMessage`. The endpoint calls `SaveChanges` once, so the job and
@@ -110,8 +125,7 @@ RabbitMQ is the local and E2E default. Durable exchanges and queues carry reques
 and dead-letter traffic. Requests use manual acknowledgements; results use publisher confirms and
 the durable worker outbox.
 
-Azure Service Bus is an implemented provider, but no Azure environment is deployed by this
-repository. An operator must provision:
+Azure Service Bus is an implemented provider. The checked-in Bicep package provisions:
 
 1. one topic shared by request, retry, and result messages;
 2. a worker request subscription whose correlation rule matches `Subject` to
@@ -121,15 +135,18 @@ repository. An operator must provision:
    `caseledger.audit.verification.result.v1` (SQL equivalent:
    `sys.Label = 'caseledger.audit.verification.result.v1'`).
 
-The subscriptions must not retain an unfiltered default rule. Both consumers use PeekLock with
+The subscriptions do not retain an unfiltered default rule. Both consumers use PeekLock with
 automatic completion disabled. Valid work is completed explicitly, rejected contracts are
 dead-lettered with sanitized reasons, and infrastructure failures are abandoned. Worker retries are
 scheduled topic messages with a unique broker message ID per attempt while the application `jobId`
 remains stable.
 
 Provider selection is configuration-only. The API reads `Messaging__Provider` and its provider
-section; the worker reads `BROKER_PROVIDER` and the corresponding broker variables. Connection
-values belong in the deployment platform's secret store and must not be committed.
+section; the worker reads `BROKER_PROVIDER` and the corresponding broker variables. Local connection
+strings remain supported, while Azure uses a fully qualified namespace and separate user-assigned
+managed identities for send/receive access. The API rejects a queued snapshot larger than the
+configured serialized payload ceiling before it creates job or outbox rows. The Azure Standard
+template sets that ceiling to 192 KiB, below the broker's 256 KiB limit.
 
 ### Signed outbound webhook
 
@@ -189,11 +206,30 @@ Delivery is intentionally at least once across each network boundary:
 Exactly-once side effects are not assumed. A process can publish successfully and stop before
 marking its outbox row, so every downstream consumer must remain idempotent.
 
-## Authentication, telemetry, and privacy
+## Authentication, key protection, telemetry, and privacy
 
-Passwords use PBKDF2-SHA256 with fixed-time verification. Successful login creates an eight-hour,
-HTTP-only, same-site cookie. Both seeded roles can perform case work; audit export requires `Admin`.
-The seeded identity model is for demonstration, not production account lifecycle management.
+Passwords use PBKDF2-SHA256 with per-password random salts and fixed-time verification. Successful
+login creates an eight-hour, HTTP-only, same-site cookie. Both seeded roles can perform case work;
+audit export requires `Admin`. Demo login is disabled in the base production configuration and is
+enabled explicitly by development/demo manifests. When enabled in Production, both seeded
+passwords must be supplied through configuration; disabling it rotates the stored demo hashes and
+prevents local login. Public credential hints are a separate capability enabled only by deliberate
+demo manifests. Cookie principals are revalidated against the current active/local-login state on
+every request, and changed roles replace and renew the session principal.
+
+Optional Microsoft Entra OIDC validates the configured tenant and resolves a session only through
+the immutable `(tenant ID, object ID)` external-identity mapping. It never links by an email or
+display-name claim. Automatic provisioning is opt-in and can create only an active, external-only
+`Analyst`; otherwise an existing mapping is required. The Azure path can create one immutable
+tenant/object-ID mapping to the seeded administrator during first startup, and refuses to silently
+replace a conflicting mapping. The API converts the external principal into the same application
+cookie used by the rest of the authorization surface. Provider or authorization failures return to
+a fixed local error state rather than reflecting remote details.
+
+For Azure revisions, the cookie Data Protection key ring is persisted to a dedicated Blob object
+and encrypted with a versionless Key Vault RSA key. The API managed identity receives the scoped
+Blob and cryptographic permissions, allowing sessions to survive Container App revisions without
+embedding storage keys or vault credentials.
 
 The API always emits UTC structured console logs. OTLP trace, metric, and log export is registered
 only when `OTEL_EXPORTER_OTLP_ENDPOINT` is present. Telemetry uses bounded operational attributes
@@ -207,7 +243,7 @@ message bodies, and uploaded content.
 | `npm run dev` | SQLite | Disabled by default; UI uses synchronous verification fallback |
 | Docker Compose | PostgreSQL | RabbitMQ worker and signed local webhook receiver enabled |
 | Render demo | Neon PostgreSQL | Disabled by default; UI keeps synchronous fallback |
-| Azure-ready configuration | PostgreSQL | Service Bus provider available after operator provisioning; not deployed here |
+| Azure deployment package | Private PostgreSQL | Bicep configures Service Bus, Blob, Key Vault, managed identities, API and worker; package is not provisioned yet |
 
 ## Test strategy
 
@@ -220,7 +256,7 @@ message bodies, and uploaded content.
    behavior, RabbitMQ topology, Service Bus settlement and scheduled retries, idempotency conflicts,
    retry exhaustion, and health state.
 4. Playwright uses disposable PostgreSQL, RabbitMQ, API, worker, and webhook-receiver containers. It
-   covers a successful distributed workflow, direct audit-row tampering, duplicate request/result
+   covers a successful distributed workflow with server-hashed evidence, direct audit-row tampering, duplicate request/result
    replay without duplicate state or webhook delivery, and dead-lettering an invalid request.
 
 `npm run check` runs the fast layers; `npm run test:e2e` runs the Docker-backed browser and

@@ -1,7 +1,7 @@
-# Local operations
+# Operations
 
 This guide covers development, the distributed Compose demonstration, E2E verification, and the
-configuration boundary for Azure Service Bus. It is not a production operations runbook.
+operator-controlled Azure deployment package. It is not a complete production operations runbook.
 
 ## Fast verification
 
@@ -45,6 +45,9 @@ This mode uses SQLite. Messaging and webhooks are disabled by default, so the qu
 `503` and the React client falls back to synchronous audit verification. Swagger uses the same
 cookie session as the client; call the login endpoint before protected routes.
 
+Evidence uploads are hashed by the API and stored under `apps/api/App_Data/evidence` by default.
+The directory is ignored by Git. Removing it deletes local evidence objects but not database rows.
+
 ## Distributed Compose demonstration
 
 Copy the local-only environment template, replace every placeholder with a local value, and keep the
@@ -84,6 +87,9 @@ The API process probe confirms that the process is serving requests. The worker 
 only when both PostgreSQL and the selected broker are ready; otherwise it returns `503` with a
 degraded state.
 
+Compose mounts a named volume at `/data`; the API stores evidence beneath `/data/evidence`. The
+volume survives `docker compose down` but is removed by `docker compose down --volumes`.
+
 ### RabbitMQ delivery paths
 
 The Compose stack declares durable request, retry, result, and dead-letter queues. Worker
@@ -107,38 +113,68 @@ UTF-8 request body, then deduplicate using `X-CaseLedger-Delivery` or `Idempoten
 marks the row delivered. Network failures, timeouts, 408, 429, and 5xx responses retry; other 4xx
 responses and exhausted attempts move the database delivery row to its terminal dead-letter state.
 
-## Azure Service Bus provider
+## Azure production package
 
-Azure Service Bus support is implemented but not deployed by this repository. Before enabling it,
-an operator must provision one topic and two subscriptions:
+The `infra/azure` package defines a production-oriented foundation, but it has not been provisioned.
+Review expected Azure charges and sign in to the intended subscription before running a deployment.
+The package creates private-networked PostgreSQL, a Container Apps environment with API and worker
+apps, Service Bus, private Blob containers, Key Vault, and separate user-assigned managed identities.
+It also persists ASP.NET Core Data Protection keys in Blob and protects them with a Key Vault key.
+
+Validate the Bicep locally without creating resources:
+
+```powershell
+./infra/azure/validate.ps1
+```
+
+For GitHub deployment, run `infra/azure/bootstrap-github-oidc.ps1` only after signing in to Azure.
+It prepares workload identity federation for the protected `azure-production` environment. Store
+the printed Azure identifiers and required passwords as protected environment secrets; never add
+them to tracked parameter files. The manual `Deploy Azure production` workflow accepts a
+`plan` operation for `what-if` or an explicit `deploy` operation and uses immutable commit-tagged
+GHCR images. See [`infra/azure/README.md`](../infra/azure/README.md) for prerequisites and commands.
+
+### Service Bus topology and identity
+
+The template creates one topic and two subscriptions:
 
 | Consumer | Required subscription rule |
 | --- | --- |
 | TypeScript worker | Correlation `Subject = caseledger.audit.verification.requested.v1` or SQL `sys.Label = 'caseledger.audit.verification.requested.v1'` |
 | ASP.NET API | Correlation `Subject = caseledger.audit.verification.result.v1` or SQL `sys.Label = 'caseledger.audit.verification.result.v1'` |
 
-Remove each subscription's unfiltered default rule. Requests, scheduled retries, and results share
+Each subscription has only its exact subject filter. Requests, scheduled retries, and results share
 the same topic. Both consumers use PeekLock and manual settlement: successful work is completed,
 invalid contracts are dead-lettered, and infrastructure failures are abandoned for redelivery.
 
-Configure the API through deployment secrets/settings:
+The Bicep deployment configures the API with the Service Bus fully qualified namespace and its
+user-assigned managed identity. For a manually provisioned environment, configure:
 
 - `Messaging__Enabled`
 - `Messaging__Provider`
 - `Messaging__AzureServiceBus__ConnectionString`
+- `Messaging__AzureServiceBus__FullyQualifiedNamespace`
+- `Messaging__AzureServiceBus__ManagedIdentityClientId`
 - `Messaging__AzureServiceBus__TopicName`
 - `Messaging__AzureServiceBus__ResultSubscriptionName`
+- `Messaging__MaximumMessageBytes`
 
 Configure the worker through deployment secrets/settings:
 
 - `BROKER_PROVIDER`
 - `AZURE_SERVICE_BUS_CONNECTION_STRING`
+- `AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE`
+- `AZURE_MANAGED_IDENTITY_CLIENT_ID`
 - `AZURE_SERVICE_BUS_TOPIC`
 - `AZURE_SERVICE_BUS_REQUEST_SUBSCRIPTION`
 - `AUDIT_WORKER_DATABASE_URL`
 
-Set the API provider to `AzureServiceBus` and the worker provider to `azure-service-bus`. Enable the
-API only after the topic and filtered subscriptions exist.
+Use exactly one credential mode per component: a connection string for local/manual compatibility,
+or a fully qualified namespace with Azure credentials. The Bicep path uses managed identities and
+disables Service Bus local/SAS authentication. Set the API provider to `AzureServiceBus` and the
+worker provider to `azure-service-bus`; enable them only after the topic and filtered subscriptions
+exist. The Standard template caps serialized verification snapshots at 192 KiB so application
+payloads retain headroom under the broker limit.
 
 The API topic and worker topic must be the same resource. Do not place connection values in tracked
 files or logs. Provider startup validation reports only the invalid setting category, not its value.
@@ -146,6 +182,21 @@ files or logs. Provider startup validation reports only the invalid setting cate
 Hosted webhook settings are `Webhook__Enabled`, `Webhook__DestinationUrl`,
 `Webhook__SigningSecret`, and `Webhook__AllowInsecureHttp`. Keep the feature disabled until the
 receiver can validate signatures and delivery IDs.
+
+### Evidence, session keys, and sign-in
+
+The Azure API uses its managed identity to write evidence objects to the private `evidence` Blob
+container. It also writes its shared Data Protection key ring to the separate `data-protection`
+container and wraps those keys with a versionless Key Vault key. Do not substitute account keys,
+SAS values, or version-pinned Key Vault identifiers in tracked settings.
+
+The template has no implicit authentication mode: every deployment must explicitly choose `Entra`,
+`Demo`, or `DemoAndEntra`. For Entra, configure one tenant ID, application client ID, protected
+client secret, registered callback URI, and preferably the exact Entra object ID that will receive
+the one-time seeded-administrator mapping. The mapping is immutable and email claims are never used
+for linking. Tenant-wide `AutoProvisionAnalyst` is available only as a deliberate alternative and
+should normally remain disabled. Demo modes require both seeded passwords; credential hints remain
+off unless the environment is intentionally public. Never reuse the public Render credentials.
 
 ## Docker-backed E2E workflows
 
@@ -162,7 +213,7 @@ Global setup recreates the isolated `caseledger-e2e` project and waits for the a
 webhook receiver is at `http://127.0.0.1:5154`. Global teardown removes containers and disposable
 volumes.
 
-The suite covers login, case creation, evidence hashing, distributed audit verification, a direct
+The suite covers login, case creation, server-side evidence hashing and persistence, distributed audit verification, a direct
 PostgreSQL audit-row change, duplicate API-request and worker-result publication, idempotent result
 and webhook handling, and dead-lettering a malformed request contract.
 
@@ -195,6 +246,10 @@ images to GHCR, and the API image is selected for Render only after the reposito
 The service has no hosted worker or broker; messaging and webhooks therefore stay disabled and the
 client uses synchronous verification fallback.
 
+Render currently uses the local evidence provider without a persistent disk. Uploaded bytes can be
+lost when the free service is replaced or recycled even while Neon retains the evidence metadata;
+use the Azure Blob provider or another durable object store for a real hosted evidence workflow.
+
 The checked-in `render.yaml` remains a valid repo-based Blueprint option and explicitly keeps both
 features disabled. It does not describe the separate image-backed service's update mechanism, and
 it does not claim an Azure Service Bus deployment.
@@ -207,6 +262,6 @@ Stop the normal stack while retaining database and broker volumes:
 docker compose down
 ```
 
-Adding `--volumes` deletes local PostgreSQL, RabbitMQ, and observability data. The Compose services,
+Adding `--volumes` deletes local PostgreSQL, RabbitMQ, evidence objects, and observability data. The Compose services,
 local webhook receiver, and LGTM backend are development tools; production requires managed secret
 storage, TLS, access control, backups, retention, monitoring, and deliberate dead-letter recovery.

@@ -23,7 +23,8 @@ The free Render service may take about a minute to wake after inactivity. The ho
 - EF Core with zero-configuration SQLite locally and PostgreSQL migrations for hosted deployments
 - Page-based case queries and strong ETag optimistic concurrency for updates
 - SHA-256 chained audit events with immutable tracked history
-- Browser-side evidence hashing without retaining uploaded file contents
+- Multipart evidence uploads with server-side SHA-256 hashing and retained object bytes
+- Local filesystem and managed-identity Azure Blob evidence providers
 - Transactional verification jobs and request outbox records in the ASP.NET database
 - RabbitMQ locally or an Azure Service Bus provider for hosted asynchronous verification
 - A TypeScript worker with a durable PostgreSQL inbox and result outbox
@@ -33,6 +34,8 @@ The free Render service may take about a minute to wake after inactivity. The ho
 - An independent, dependency-free Node.js 24 audit-verifier library and CLI
 - Vitest, React Testing Library, and jsdom component tests for client workflows and accessible interactions
 - OpenAPI documentation plus OpenTelemetry traces, metrics, and structured JSON logs
+- Optional Microsoft Entra OIDC sign-in with explicit tenant/object-ID account linkage
+- An Azure Bicep and GitHub OIDC deployment package using managed identities and Key Vault
 - API integration and Playwright browser tests covering real workflows, PostgreSQL, and deliberate audit tampering
 
 ## Run locally
@@ -60,14 +63,18 @@ clicking **Verify now** falls back to in-process verification when the queue end
 | Analyst | `analyst@caseledger.dev` | `Analyst123!` | Standard case workflows |
 | Administrator | `admin@caseledger.dev` | `Admin123!` locally; `Seed__AdminPassword` when hosted | Standard workflows and audit export |
 
-These accounts are deterministic demonstration credentials, not a production identity design. Hosted deployments must provide a private `Seed__AdminPassword`; the public login screen only fills the shared analyst account.
+These accounts are deterministic demonstration credentials, not a production identity design. Demo
+login is disabled in the base production configuration; development, Compose, and Render enable it
+explicitly. A Production environment that enables it must supply `Seed__AdminPassword` and
+`Seed__AnalystPassword`, with both values kept private unless the environment is intentionally a
+public demo. Microsoft Entra OIDC can instead be enabled with a strict tenant/object-ID mapping.
 
 ## Core workflow
 
 1. Sign in as an analyst or administrator.
 2. Search, filter, create, assign, and update cases.
 3. Add comments that become immutable activity events.
-4. Register evidence metadata after the browser computes its SHA-256 digest.
+4. Upload evidence for server-side SHA-256 hashing and object storage.
 5. Verify an individual case's complete activity chain synchronously or through the durable worker.
 6. Export an audit chain as an administrator and verify it independently with Node.js.
 
@@ -84,6 +91,7 @@ flowchart LR
     Browser[React + TypeScript SPA]
     API[ASP.NET Core API]
     Data[(API database)]
+    Evidence[(Local files or<br/>Azure Blob Storage)]
     Broker{RabbitMQ or<br/>Azure Service Bus}
     Worker[TypeScript audit worker]
     WorkerData[(Worker inbox +<br/>result outbox)]
@@ -91,7 +99,8 @@ flowchart LR
 
     Browser -->|REST commands| API
     Browser -->|GraphQL dashboard| API
-    Browser -->|SHA-256 evidence metadata| API
+    Browser -->|multipart evidence bytes| API
+    API -->|hash + private object write| Evidence
     API -->|case + job + request outbox| Data
     Data -->|outbox dispatch| Broker
     Broker -->|immutable v1 snapshot| Worker
@@ -107,8 +116,10 @@ REST owns mutations and detailed case reads. GraphQL has one focused purpose: as
 Creating a queued verification writes the job and its immutable request snapshot to the API database
 in one transaction. The worker stores each `jobId` and result atomically in its own PostgreSQL
 inbox/outbox. Broker delivery is at least once: a versioned full-request fingerprint and deterministic
-result IDs make duplicate requests and results safe, while conflicting reuse is rejected. RabbitMQ is the Compose default;
-Azure Service Bus is implemented as an alternative provider but is not deployed by this repository.
+result IDs make duplicate requests and results safe, while conflicting reuse is rejected. RabbitMQ is the Compose default.
+Azure Service Bus is the hosted alternative, and the checked-in Bicep package provisions its topic,
+filtered subscriptions, identities, and role assignments. No Azure environment has been provisioned
+from this repository yet.
 
 ### Audit chain
 
@@ -127,14 +138,16 @@ See [architecture.md](docs/architecture.md) for the data model, trust boundary, 
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/auth/capabilities` | Report enabled sign-in methods and whether public demo credentials may be shown |
 | `POST` | `/api/auth/login` | Create an HTTP-only cookie session |
+| `GET` | `/api/auth/entra/login` | Begin optional Microsoft Entra OIDC sign-in |
 | `GET` | `/api/auth/me` | Return the signed-in user |
 | `POST` | `/api/auth/logout` | End the session |
 | `GET` | `/api/users` | List assignable users |
 | `GET` / `POST` | `/api/cases` | Page and search cases, or create one |
 | `GET` / `PATCH` | `/api/cases/{id}` | Read one case or update its current version |
 | `POST` | `/api/cases/{id}/comments` | Append a comment event |
-| `POST` | `/api/cases/{id}/evidence` | Register evidence metadata and digest |
+| `POST` | `/api/cases/{id}/evidence` | Upload multipart evidence; store bytes and a server-computed digest |
 | `GET` | `/api/cases/{id}/audit` | Read the activity chain |
 | `GET` | `/api/cases/{id}/audit/verify` | Recalculate and verify the chain |
 | `POST` | `/api/cases/{id}/audit/verifications` | Queue an immutable verification snapshot |
@@ -228,7 +241,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-Those Playwright tests exercise analyst login, case creation, browser-side evidence hashing,
+Those Playwright tests exercise analyst login, case creation, server-side evidence hashing,
 asynchronous verification, direct PostgreSQL tampering, duplicate request/result replay,
 dead-letter handling for an invalid message, and one signed webhook delivery. See
 [operations.md](docs/operations.md) for the local E2E and observability commands.
@@ -256,6 +269,16 @@ and demonstrations only; it is not a production monitoring deployment.
 
 The public demo runs on Render from an immutable GHCR API image selected after repository checks pass. Its PostgreSQL data is hosted by Neon. CI publishes versioned API and worker images to GHCR; the image-backed Render service is updated deliberately after a green run. Messaging and webhooks remain disabled there unless an operator explicitly provisions and configures the required infrastructure.
 
+The production-oriented Azure package lives in [`infra/azure`](infra/azure). It defines private
+PostgreSQL networking, Container Apps for the API and worker, Service Bus, private Blob containers,
+Key Vault, persistent Data Protection keys, and separate user-assigned managed identities. The
+manual GitHub workflow authenticates to Azure with OIDC, supports a `what-if` plan, and deploys
+immutable commit-tagged images from the protected `azure-production` environment. It requires an
+operator-owned Azure subscription, protected environment values, and a cost review; it has not been
+run against a production subscription. Every deployment must explicitly select `Entra`, `Demo`, or
+`DemoAndEntra`; the Entra path supports a one-time immutable administrator object-ID mapping so a
+fresh database is usable without granting access to every identity in the tenant.
+
 ## Repository layout
 
 ```text
@@ -270,6 +293,7 @@ tools/webhook-receiver/ Local signed-delivery test receiver
 docs/                   Architecture, operations, ADRs, and screenshots
 ops/observability/      Local Grafana dashboard provisioning
 .github/workflows/      CI and container image publishing
+infra/azure/            Bicep, validation, and GitHub OIDC bootstrap package
 compose.yaml            PostgreSQL, RabbitMQ, API, worker, and webhook receiver
 compose.e2e.yaml        Disposable distributed browser-test stack
 compose.observability.yaml  Local OpenTelemetry/Grafana overlay
@@ -279,12 +303,13 @@ render.yaml             Render Blueprint configuration
 
 ## Deliberate tradeoffs
 
-- Evidence bytes are not retained. The browser hashes a selected file and sends only metadata; a production collector would hash again server-side and store content in controlled object storage.
+- Uploaded evidence bytes are retained under generated case/evidence object keys and hashed by the API. There is no download endpoint, malware scanning, retention policy, or legal-hold workflow yet. The seeded sample evidence remains metadata-only.
+- Local and Compose evidence objects use filesystem storage. The Render demo has no persistent object volume, so an instance replacement can leave database metadata without its uploaded bytes; Azure Blob is the intended durable hosted provider.
 - A hash chain is tamper-evident, not an external trust anchor. A database administrator who can rewrite the entire chain could recompute it; production hardening would periodically publish signed chain heads to separate storage.
 - SQLite uses `EnsureCreated` for zero-configuration local development; hosted PostgreSQL uses checked-in EF Core migrations.
-- Seeded cookie authentication keeps the workflow immediately testable. Production deployment would use an external identity provider, anti-forgery protection, secret management, and stricter cookie policy.
+- Seeded cookie authentication keeps local and Render demonstrations immediately testable. Production demo login defaults off; optional Entra OIDC maps only a configured tenant and immutable object ID, without email-based account linking. Cookie principals are checked against current user status and role on every request. Anti-forgery hardening and administrator-managed identity lifecycle remain future work.
 - Broker and webhook delivery are at least once. Consumers use stable idempotency identifiers; an operator must monitor and replay dead-lettered work intentionally.
-- Azure Service Bus support is a configurable provider, not a claim that an Azure environment has been deployed.
+- The Azure deployment package is validated infrastructure-as-code, not a claim that an Azure environment has been provisioned or paid for.
 - Local telemetry deliberately records bounded operational attributes, identifiers, counts, and timings—not filenames, email addresses, request secrets, credentials, or uploaded content.
 
 ## License
