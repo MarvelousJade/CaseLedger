@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,7 +10,9 @@ using Microsoft.EntityFrameworkCore;
 
 namespace CaseLedger.Api.Services;
 
-public sealed class AuditChainService(CaseLedgerDbContext db)
+public sealed class AuditChainService(
+    CaseLedgerDbContext db,
+    CaseLedgerTelemetry telemetry)
 {
     public const string GenesisHash = "0000000000000000000000000000000000000000000000000000000000000000";
 
@@ -86,10 +89,39 @@ public sealed class AuditChainService(CaseLedgerDbContext db)
         return auditEvent;
     }
 
+    public void RecordAppendCommitted(AuditEvent auditEvent) =>
+        telemetry.RecordAuditEventAppended(
+            auditEvent.CaseId,
+            auditEvent.Sequence,
+            auditEvent.EventType);
+
     public async Task<AuditVerificationResponse> VerifyAsync(
         Guid caseId,
         CancellationToken cancellationToken = default)
     {
+        using var activity = telemetry.StartCaseOperation("caseledger.audit.verify", caseId);
+        var stopwatch = Stopwatch.StartNew();
+
+        AuditVerificationResponse Complete(AuditVerificationResponse response)
+        {
+            stopwatch.Stop();
+            activity?.SetTag("caseledger.audit.result", response.Valid ? "valid" : "invalid");
+            activity?.SetTag("caseledger.audit.checked_events", response.CheckedEvents);
+            if (response.BrokenAt is not null)
+            {
+                activity?.SetTag("caseledger.audit.broken_at", response.BrokenAt.Value);
+            }
+
+            activity?.SetStatus(ActivityStatusCode.Ok);
+            telemetry.RecordAuditVerification(
+                caseId,
+                response.Valid,
+                response.CheckedEvents,
+                response.BrokenAt,
+                stopwatch.Elapsed);
+            return response;
+        }
+
         var events = await db.AuditEvents
             .AsNoTracking()
             .Where(item => item.CaseId == caseId)
@@ -113,14 +145,17 @@ public sealed class AuditChainService(CaseLedgerDbContext db)
 
             if (!valid)
             {
-                return new AuditVerificationResponse(false, checkedEvents, auditEvent.Sequence);
+                return Complete(new AuditVerificationResponse(
+                    false,
+                    checkedEvents,
+                    auditEvent.Sequence));
             }
 
             previousHash = auditEvent.Hash;
             expectedSequence++;
         }
 
-        return new AuditVerificationResponse(true, checkedEvents);
+        return Complete(new AuditVerificationResponse(true, checkedEvents));
     }
 
     public static string ComputeHash(string previousHash, string canonicalData)
@@ -207,12 +242,16 @@ public sealed class AuditChainService(CaseLedgerDbContext db)
 
     private static DateTime NormalizeUtc(DateTime value)
     {
-        return value.Kind switch
+        var utc = value.Kind switch
         {
             DateTimeKind.Utc => value,
             DateTimeKind.Local => value.ToUniversalTime(),
             _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
         };
+
+        return new DateTime(
+            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
+            DateTimeKind.Utc);
     }
 
     private static string FormatUtc(DateTime value) =>

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using System.Text.Json;
 using CaseLedger.Api.Contracts;
@@ -244,6 +245,7 @@ public static class CaseEndpoints
         HttpResponse httpResponse,
         CaseLedgerDbContext db,
         AuditChainService auditChain,
+        CaseLedgerTelemetry telemetry,
         CancellationToken cancellationToken)
     {
         var errors = ValidateCreate(request);
@@ -277,9 +279,12 @@ public static class CaseEndpoints
 
         var now = DateTime.UtcNow;
         var tags = CaseMappings.NormalizeTags(request.Tags);
+        var caseId = Guid.NewGuid();
+        using var activity = telemetry.StartCaseOperation("caseledger.case.create", caseId);
+        activity?.SetTag("caseledger.case.severity", severity.ToString().ToLowerInvariant());
         var caseRecord = new CaseRecord
         {
-            Id = Guid.NewGuid(),
+            Id = caseId,
             Reference = await NextReferenceAsync(db, now.Year, cancellationToken),
             Title = request.Title!.Trim(),
             Summary = request.Summary!.Trim(),
@@ -297,7 +302,7 @@ public static class CaseEndpoints
         };
 
         db.Cases.Add(caseRecord);
-        await auditChain.AppendAsync(
+        var auditEvent = await auditChain.AppendAsync(
             caseRecord.Id,
             "CaseCreated",
             $"Case {caseRecord.Reference} created",
@@ -314,7 +319,19 @@ public static class CaseEndpoints
                 ["title"] = caseRecord.Title
             },
             cancellationToken: cancellationToken);
-        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception exception)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+            throw;
+        }
+
+        auditChain.RecordAppendCommitted(auditEvent);
+        telemetry.RecordCaseCreated(caseRecord.Id, caseRecord.Severity.ToString());
+        activity?.SetStatus(ActivityStatusCode.Ok);
 
         var response = await CaseMappings.LoadDetailAsync(db, caseRecord.Id, cancellationToken);
         SetETag(httpResponse, caseRecord.Version);
@@ -501,7 +518,7 @@ public static class CaseEndpoints
         }
 
         item.UpdatedAt = DateTime.UtcNow;
-        await auditChain.AppendAsync(
+        var auditEvent = await auditChain.AppendAsync(
             item.Id,
             "CaseUpdated",
             $"Case {item.Reference} updated: {string.Join(", ", changes.Keys)}",
@@ -529,6 +546,7 @@ public static class CaseEndpoints
             return PreconditionFailed();
         }
 
+        auditChain.RecordAppendCommitted(auditEvent);
         var response = await CaseMappings.LoadDetailAsync(db, item.Id, cancellationToken);
         SetETag(httpResponse, item.Version);
         return Results.Ok(response);
@@ -579,6 +597,7 @@ public static class CaseEndpoints
             return CaseWriteConflict();
         }
 
+        auditChain.RecordAppendCommitted(auditEvent);
         return Results.Created(
             $"/api/cases/{item.Id:D}/audit/{auditEvent.Sequence}",
             CaseMappings.ToActivity(auditEvent));
@@ -590,6 +609,7 @@ public static class CaseEndpoints
         ClaimsPrincipal principal,
         CaseLedgerDbContext db,
         AuditChainService auditChain,
+        CaseLedgerTelemetry telemetry,
         CancellationToken cancellationToken)
     {
         var errors = ValidateEvidence(request);
@@ -624,10 +644,15 @@ public static class CaseEndpoints
             AddedBy = actor,
             CreatedAt = now
         };
+        using var activity = telemetry.StartCaseOperation(
+            "caseledger.evidence.register",
+            item.Id);
+        activity?.SetTag("caseledger.evidence.id", evidence.Id.ToString("D"));
+        activity?.SetTag("caseledger.evidence.size_bytes", evidence.SizeBytes);
 
         db.Evidence.Add(evidence);
         item.UpdatedAt = now;
-        await auditChain.AppendAsync(
+        var auditEvent = await auditChain.AppendAsync(
             item.Id,
             "EvidenceAdded",
             $"Evidence {evidence.FileName} added",
@@ -647,9 +672,22 @@ public static class CaseEndpoints
         }
         catch (DbUpdateConcurrencyException)
         {
+            activity?.SetStatus(ActivityStatusCode.Error, "concurrency_conflict");
             return CaseWriteConflict();
         }
+        catch (Exception exception)
+        {
+            activity?.SetStatus(ActivityStatusCode.Error, exception.GetType().Name);
+            throw;
+        }
 
+        auditChain.RecordAppendCommitted(auditEvent);
+        telemetry.RecordEvidenceRegistered(
+            item.Id,
+            evidence.Id,
+            evidence.MediaType,
+            evidence.SizeBytes);
+        activity?.SetStatus(ActivityStatusCode.Ok);
         return Results.Created(
             $"/api/cases/{item.Id:D}/evidence/{evidence.Id:D}",
             CaseMappings.ToEvidence(evidence));

@@ -83,4 +83,41 @@ public sealed class AuditTamperingTests
         Assert.Equal(expected, actual);
         Assert.Matches("^[0-9a-f]{64}$", actual);
     }
+
+    [Fact]
+    public async Task AppendNormalizesSubMicrosecondTimestampAndStillVerifies()
+    {
+        using var factory = new CaseLedgerFactory();
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CaseLedgerDbContext>();
+        var auditChain = scope.ServiceProvider.GetRequiredService<AuditChainService>();
+        var target = await db.Cases
+            .Include(item => item.CreatedBy)
+            .SingleAsync(item => item.Reference == "CL-2026-002");
+        var input = new DateTime(2026, 7, 17, 1, 2, 3, DateTimeKind.Utc).AddTicks(7);
+
+        Assert.NotEqual(0, input.Ticks % TimeSpan.TicksPerMicrosecond);
+
+        var auditEvent = await auditChain.AppendAsync(
+            target.Id,
+            "CommentAdded",
+            "Timestamp precision regression event",
+            target.CreatedBy,
+            new Dictionary<string, object?> { ["source"] = "regression" },
+            createdAt: input);
+        await db.SaveChangesAsync();
+        auditChain.RecordAppendCommitted(auditEvent);
+
+        Assert.Equal(0, auditEvent.CreatedAt.Ticks % TimeSpan.TicksPerMicrosecond);
+        Assert.Equal(input.Ticks - 7, auditEvent.CreatedAt.Ticks);
+
+        db.ChangeTracker.Clear();
+        var persisted = await db.AuditEvents
+            .AsNoTracking()
+            .SingleAsync(item => item.Id == auditEvent.Id);
+        Assert.Equal(auditEvent.CreatedAt, persisted.CreatedAt);
+
+        var verification = await auditChain.VerifyAsync(target.Id);
+        Assert.True(verification.Valid);
+    }
 }
