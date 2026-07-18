@@ -156,6 +156,10 @@ var resultMessageSubject = 'caseledger.audit.verification.result.v1'
 var auditTopicName = 'caseledger-audit'
 var workerRequestSubscriptionName = 'caseledger-audit-worker'
 var apiResultSubscriptionName = 'caseledger-api-results'
+// Use durable, non-reserved names. Azure creates and manages `$Default` specially,
+// and targeting that name can leave a deployed subscription with no live rule.
+var workerRequestRuleName = 'verification-requests-v1'
+var apiResultRuleName = 'verification-results-v1'
 var evidenceContainerName = 'evidence'
 var dataProtectionContainerName = 'data-protection'
 var deploymentSuffix = take(uniqueString(subscription().id, resourceGroup().id, namePrefix, environmentName), 6)
@@ -514,7 +518,7 @@ resource workerRequestSubscription 'Microsoft.ServiceBus/namespaces/topics/subsc
 
 resource workerRequestFilter 'Microsoft.ServiceBus/namespaces/topics/subscriptions/rules@2024-01-01' = {
   parent: workerRequestSubscription
-  name: '$Default'
+  name: workerRequestRuleName
   properties: {
     correlationFilter: {
       label: requestMessageSubject
@@ -540,7 +544,7 @@ resource apiResultSubscription 'Microsoft.ServiceBus/namespaces/topics/subscript
 
 resource apiResultFilter 'Microsoft.ServiceBus/namespaces/topics/subscriptions/rules@2024-01-01' = {
   parent: apiResultSubscription
-  name: '$Default'
+  name: apiResultRuleName
   properties: {
     correlationFilter: {
       label: resultMessageSubject
