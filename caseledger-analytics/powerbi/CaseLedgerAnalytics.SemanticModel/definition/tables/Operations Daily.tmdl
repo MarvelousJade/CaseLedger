@@ -1,0 +1,87 @@
+table 'Operations Daily'
+
+	lineageTag: 231927f4-41bd-4022-8904-05df3df12c68
+
+	measure 'Cases Opened' = SUM('Operations Daily'[Cases Opened Value])
+		formatString: #,0
+		lineageTag: b8a9f7b5-917f-4a1f-9d6a-35291176a017
+
+	measure 'Cases Closed' = SUM('Operations Daily'[Cases Closed Value])
+		formatString: #,0
+		lineageTag: ef98bc0c-729e-4c19-8265-ea6736728054
+
+	measure 'Backlog EOD' = SUM('Operations Daily'[Backlog EOD Value])
+		formatString: #,0
+		lineageTag: ea4288ea-a28d-4eac-a587-5871b4b19b95
+
+	column 'Calendar Date'
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 94bb7508-ae10-49a0-8113-acfc36017d0c
+		summarizeBy: none
+		sourceColumn: calendar_date
+
+	column Status
+		dataType: string
+		lineageTag: af62f5ab-e2b1-44cd-bb46-961777483366
+		summarizeBy: none
+		sourceColumn: status_name
+
+	column Category
+		dataType: string
+		lineageTag: 0ce64373-b071-41a0-837b-ff7d2b624067
+		summarizeBy: none
+		sourceColumn: category_name
+
+	column Priority
+		dataType: string
+		lineageTag: 023d3e3d-2752-4852-bca0-69ad09c0262d
+		summarizeBy: none
+		sourceColumn: priority_name
+
+	column 'Cases Opened Value'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 3cbeed89-0558-4775-aa48-bfca1f2f2acf
+		summarizeBy: sum
+		sourceColumn: cases_opened
+
+	column 'Cases Closed Value'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 96fa03ba-6aee-4474-bb90-abd3b79bd551
+		summarizeBy: sum
+		sourceColumn: cases_closed
+
+	column 'Backlog EOD Value'
+		dataType: int64
+		formatString: #,0
+		lineageTag: a5304e4d-e94e-471f-85ae-c269c186e84d
+		summarizeBy: sum
+		sourceColumn: backlog_eod
+
+	column 'Average Case Age Days'
+		dataType: decimal
+		formatString: 0.0
+		lineageTag: 1abf9aaa-adb0-4c79-b236-f39536a5849c
+		summarizeBy: average
+		sourceColumn: average_case_age_days
+
+	column 'SLA Breach Count Value'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 74dfd692-e251-45c4-aada-792d8d2e2419
+		summarizeBy: sum
+		sourceColumn: sla_breach_count
+
+	partition 'Operations Daily' = m
+		mode: import
+		queryGroup: 'Reporting Marts'
+		source =
+			let
+			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+			    Mart = Source{[Schema="mart",Item="vw_OperationsDaily"]}[Data]
+			in
+			    Mart
+
+	annotation PBI_ResultType = Table

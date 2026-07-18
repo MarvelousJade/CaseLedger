@@ -1,0 +1,273 @@
+{
+  "name": "PL_CaseLedger_Incremental",
+  "properties": {
+    "description": "Closed-window, metadata-driven CaseLedger load. Do not schedule beside the Python orchestrator in the same environment.",
+    "parameters": {
+      "KeyVaultUrl": { "type": "String" },
+      "SourceEntity": { "type": "String", "defaultValue": "caseledger" },
+      "PipelineName": { "type": "String", "defaultValue": "caseledger-adf-incremental" },
+      "SourceEntities": {
+        "type": "Array",
+        "defaultValue": [
+          { "view": "analytics_export_cases", "table": "CaseSource" },
+          { "view": "analytics_export_case_events", "table": "CaseEventSource" },
+          { "view": "analytics_export_users", "table": "UserSource" },
+          { "view": "analytics_export_delivery_attempts", "table": "IntegrationDeliverySource" }
+        ]
+      }
+    },
+    "variables": {
+      "BatchId": { "type": "String" }
+    },
+    "activities": [
+      {
+        "name": "SetBatchId",
+        "type": "SetVariable",
+        "typeProperties": {
+          "variableName": "BatchId",
+          "value": { "value": "@pipeline().RunId", "type": "Expression" }
+        }
+      },
+      {
+        "name": "LookupPreviousWatermark",
+        "type": "Lookup",
+        "dependsOn": [{ "activity": "SetBatchId", "dependencyConditions": ["Succeeded"] }],
+        "policy": { "timeout": "0.00:05:00", "retry": 2, "retryIntervalInSeconds": 30 },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": {
+              "value": "@concat('SELECT last_successful_watermark FROM ctl.Watermark WHERE source_entity = ''', pipeline().parameters.SourceEntity, '''')",
+              "type": "Expression"
+            },
+            "queryTimeout": "00:05:00"
+          },
+          "dataset": {
+            "referenceName": "DS_AzureSqlStagingTable",
+            "type": "DatasetReference",
+            "parameters": {
+              "SchemaName": "ctl",
+              "TableName": "Watermark",
+              "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" }
+            }
+          },
+          "firstRowOnly": true
+        }
+      },
+      {
+        "name": "CaptureHighWatermark",
+        "type": "Lookup",
+        "dependsOn": [{ "activity": "SetBatchId", "dependencyConditions": ["Succeeded"] }],
+        "policy": { "timeout": "0.00:05:00", "retry": 2, "retryIntervalInSeconds": 30 },
+        "typeProperties": {
+          "source": {
+            "type": "AzurePostgreSqlSource",
+            "query": "SELECT MAX(updated_at) AS high_watermark FROM (SELECT MAX(updated_at) updated_at FROM analytics_export_cases UNION ALL SELECT MAX(updated_at) FROM analytics_export_case_events UNION ALL SELECT MAX(updated_at) FROM analytics_export_users UNION ALL SELECT MAX(updated_at) FROM analytics_export_delivery_attempts) watermark_values"
+          },
+          "dataset": {
+            "referenceName": "DS_PostgreSqlExportView",
+            "type": "DatasetReference",
+            "parameters": {
+              "ViewName": "analytics_export_cases",
+              "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" }
+            }
+          },
+          "firstRowOnly": true
+        }
+      },
+      {
+        "name": "BeginETLRun",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          { "activity": "LookupPreviousWatermark", "dependencyConditions": ["Succeeded"] },
+          { "activity": "CaptureHighWatermark", "dependencyConditions": ["Succeeded"] }
+        ],
+        "linkedServiceName": {
+          "referenceName": "LS_AnalyticsAzureSql",
+          "type": "LinkedServiceReference",
+          "parameters": { "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" } }
+        },
+        "typeProperties": {
+          "storedProcedureName": "[ctl].[usp_BeginETLRun]",
+          "storedProcedureParameters": {
+            "batch_id": { "value": { "value": "@variables('BatchId')", "type": "Expression" }, "type": "Guid" },
+            "pipeline_name": { "value": { "value": "@pipeline().parameters.PipelineName", "type": "Expression" }, "type": "String" },
+            "previous_watermark": { "value": { "value": "@activity('LookupPreviousWatermark').output.firstRow.last_successful_watermark", "type": "Expression" }, "type": "DateTime" },
+            "high_watermark": { "value": { "value": "@activity('CaptureHighWatermark').output.firstRow.high_watermark", "type": "Expression" }, "type": "DateTime" }
+          }
+        }
+      },
+      {
+        "name": "CopyConfiguredEntities",
+        "type": "ForEach",
+        "dependsOn": [{ "activity": "BeginETLRun", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "items": { "value": "@pipeline().parameters.SourceEntities", "type": "Expression" },
+          "isSequential": true,
+          "activities": [
+            {
+              "name": "CopyIncrementalEntity",
+              "type": "Copy",
+              "policy": { "timeout": "0.00:30:00", "retry": 3, "retryIntervalInSeconds": 30 },
+              "inputs": [{
+                "referenceName": "DS_PostgreSqlExportView",
+                "type": "DatasetReference",
+                "parameters": {
+                  "ViewName": { "value": "@item().view", "type": "Expression" },
+                  "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" }
+                }
+              }],
+              "outputs": [{
+                "referenceName": "DS_AzureSqlStagingTable",
+                "type": "DatasetReference",
+                "parameters": {
+                  "SchemaName": "stg",
+                  "TableName": { "value": "@item().table", "type": "Expression" },
+                  "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" }
+                }
+              }],
+              "typeProperties": {
+                "source": {
+                  "type": "AzurePostgreSqlSource",
+                  "query": {
+                    "value": "@concat('SELECT * FROM ', item().view, ' WHERE updated_at > ''', activity('LookupPreviousWatermark').output.firstRow.last_successful_watermark, ''' AND updated_at <= ''', activity('CaptureHighWatermark').output.firstRow.high_watermark, '''')",
+                    "type": "Expression"
+                  },
+                  "queryTimeout": "00:30:00",
+                  "additionalColumns": [
+                    { "name": "batch_id", "value": { "value": "@variables('BatchId')", "type": "Expression" } },
+                    { "name": "extracted_at", "value": { "value": "@utcNow()", "type": "Expression" } }
+                  ]
+                },
+                "sink": {
+                  "type": "AzureSqlSink",
+                  "writeBehavior": "insert",
+                  "sqlWriterUseTableLock": true,
+                  "preCopyScript": {
+                    "value": "@concat('DELETE FROM stg.', item().table, ' WHERE batch_id = ''', variables('BatchId'), '''')",
+                    "type": "Expression"
+                  }
+                },
+                "enableStaging": false,
+                "translator": {
+                  "type": "TabularTranslator",
+                  "typeConversion": true,
+                  "typeConversionSettings": { "allowDataTruncation": false, "treatBooleanAsNumber": false }
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "TransformWarehouse",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [{ "activity": "CopyConfiguredEntities", "dependencyConditions": ["Succeeded"] }],
+        "linkedServiceName": {
+          "referenceName": "LS_AnalyticsAzureSql",
+          "type": "LinkedServiceReference",
+          "parameters": { "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" } }
+        },
+        "typeProperties": {
+          "storedProcedureName": "[dw].[usp_ProcessBatch]",
+          "storedProcedureParameters": {
+            "batch_id": { "value": { "value": "@variables('BatchId')", "type": "Expression" }, "type": "Guid" },
+            "previous_watermark": { "value": { "value": "@activity('LookupPreviousWatermark').output.firstRow.last_successful_watermark", "type": "Expression" }, "type": "DateTime" },
+            "high_watermark": { "value": { "value": "@activity('CaptureHighWatermark').output.firstRow.high_watermark", "type": "Expression" }, "type": "DateTime" }
+          }
+        }
+      },
+      {
+        "name": "ValidateBatch",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [{ "activity": "TransformWarehouse", "dependencyConditions": ["Succeeded"] }],
+        "linkedServiceName": {
+          "referenceName": "LS_AnalyticsAzureSql",
+          "type": "LinkedServiceReference",
+          "parameters": { "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" } }
+        },
+        "typeProperties": {
+          "storedProcedureName": "[ctl].[usp_ValidateBatch]",
+          "storedProcedureParameters": {
+            "batch_id": { "value": { "value": "@variables('BatchId')", "type": "Expression" }, "type": "Guid" }
+          }
+        }
+      },
+      {
+        "name": "LookupBatchOutcome",
+        "type": "Lookup",
+        "dependsOn": [{ "activity": "ValidateBatch", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": {
+              "value": "@concat('SELECT SUM(CASE WHEN passed=0 THEN 1 ELSE 0 END) failed_checks, (SELECT COUNT_BIG(*) FROM stg.CaseSource WHERE batch_id=''', variables('BatchId'), ''') + (SELECT COUNT_BIG(*) FROM stg.CaseEventSource WHERE batch_id=''', variables('BatchId'), ''') + (SELECT COUNT_BIG(*) FROM stg.UserSource WHERE batch_id=''', variables('BatchId'), ''') + (SELECT COUNT_BIG(*) FROM stg.IntegrationDeliverySource WHERE batch_id=''', variables('BatchId'), ''') rows_staged, (SELECT COUNT_BIG(*) FROM dw.DimCase WHERE load_batch_id=''', variables('BatchId'), ''') + (SELECT COUNT_BIG(*) FROM dw.FactCaseEvent WHERE load_batch_id=''', variables('BatchId'), ''') + (SELECT COUNT_BIG(*) FROM dw.FactIntegrationDelivery WHERE load_batch_id=''', variables('BatchId'), ''') + (SELECT COUNT_BIG(*) FROM dw.FactCaseDailySnapshot WHERE load_batch_id=''', variables('BatchId'), ''') rows_loaded FROM ctl.DataQualityResult WHERE batch_id=''', variables('BatchId'), '''')",
+              "type": "Expression"
+            }
+          },
+          "dataset": {
+            "referenceName": "DS_AzureSqlStagingTable",
+            "type": "DatasetReference",
+            "parameters": { "SchemaName": "ctl", "TableName": "DataQualityResult", "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" } }
+          },
+          "firstRowOnly": true
+        }
+      },
+      {
+        "name": "QualityGate",
+        "type": "IfCondition",
+        "dependsOn": [{ "activity": "LookupBatchOutcome", "dependencyConditions": ["Succeeded"] }],
+        "typeProperties": {
+          "expression": { "value": "@equals(int(activity('LookupBatchOutcome').output.firstRow.failed_checks), 0)", "type": "Expression" },
+          "ifTrueActivities": [
+            {
+              "name": "CompleteETLRun",
+              "type": "SqlServerStoredProcedure",
+              "linkedServiceName": {
+                "referenceName": "LS_AnalyticsAzureSql",
+                "type": "LinkedServiceReference",
+                "parameters": { "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" } }
+              },
+              "typeProperties": {
+                "storedProcedureName": "[ctl].[usp_CompleteETLRun]",
+                "storedProcedureParameters": {
+                  "batch_id": { "value": { "value": "@variables('BatchId')", "type": "Expression" }, "type": "Guid" },
+                  "source_entity": { "value": { "value": "@pipeline().parameters.SourceEntity", "type": "Expression" }, "type": "String" },
+                  "rows_extracted": { "value": { "value": "@activity('LookupBatchOutcome').output.firstRow.rows_staged", "type": "Expression" }, "type": "Int64" },
+                  "rows_staged": { "value": { "value": "@activity('LookupBatchOutcome').output.firstRow.rows_staged", "type": "Expression" }, "type": "Int64" },
+                  "rows_loaded": { "value": { "value": "@activity('LookupBatchOutcome').output.firstRow.rows_loaded", "type": "Expression" }, "type": "Int64" },
+                  "rows_rejected": { "value": 0, "type": "Int64" }
+                }
+              }
+            }
+          ],
+          "ifFalseActivities": [
+            {
+              "name": "MarkFailed",
+              "type": "SqlServerStoredProcedure",
+              "linkedServiceName": {
+                "referenceName": "LS_AnalyticsAzureSql",
+                "type": "LinkedServiceReference",
+                "parameters": { "KeyVaultUrl": { "value": "@pipeline().parameters.KeyVaultUrl", "type": "Expression" } }
+              },
+              "typeProperties": {
+                "storedProcedureName": "[ctl].[usp_FailETLRun]",
+                "storedProcedureParameters": {
+                  "batch_id": { "value": { "value": "@variables('BatchId')", "type": "Expression" }, "type": "Guid" },
+                  "error_message": { "value": "One or more persisted data-quality checks failed.", "type": "String" }
+                }
+              }
+            },
+            {
+              "name": "FailQualityGate",
+              "type": "Fail",
+              "dependsOn": [{ "activity": "MarkFailed", "dependencyConditions": ["Succeeded"] }],
+              "typeProperties": { "message": "CaseLedger data-quality gate failed.", "errorCode": "DQ_FAILED" }
+            }
+          ]
+        }
+      }
+    ],
+    "annotations": ["CaseLedger Analytics", "incremental", "idempotent"]
+  }
+}

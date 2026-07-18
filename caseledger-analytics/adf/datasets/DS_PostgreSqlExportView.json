@@ -1,0 +1,22 @@
+{
+  "name": "DS_PostgreSqlExportView",
+  "properties": {
+    "linkedServiceName": {
+      "referenceName": "LS_CaseLedgerPostgreSql",
+      "type": "LinkedServiceReference",
+      "parameters": {
+        "KeyVaultUrl": "@dataset().KeyVaultUrl"
+      }
+    },
+    "parameters": {
+      "ViewName": { "type": "String" },
+      "KeyVaultUrl": { "type": "String" }
+    },
+    "annotations": ["parameterized export-view dataset"],
+    "type": "AzurePostgreSqlTable",
+    "schema": [],
+    "typeProperties": {
+      "tableName": "@dataset().ViewName"
+    }
+  }
+}

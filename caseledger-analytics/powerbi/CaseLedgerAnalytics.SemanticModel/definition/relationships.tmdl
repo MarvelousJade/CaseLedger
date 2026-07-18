@@ -1,0 +1,15 @@
+relationship 5e1f3cee-17a8-4c3c-b700-9578171dcf01
+	fromColumn: 'Operations Daily'.'Calendar Date'
+	toColumn: Date.Date
+
+relationship 97ddb22e-9d49-4fa6-85c4-2c1c0bb7eef2
+	fromColumn: 'Case Aging'.'Snapshot Date'
+	toColumn: Date.Date
+
+relationship 2f725b57-b4ec-4619-9661-7364ee44ef25
+	fromColumn: 'SLA Compliance'.'Snapshot Date'
+	toColumn: Date.Date
+
+relationship b82db47e-cad1-490b-b69e-56925f2e6333
+	fromColumn: 'Integration Reliability'.'Calendar Date'
+	toColumn: Date.Date

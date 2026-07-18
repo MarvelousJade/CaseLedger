@@ -1,0 +1,92 @@
+table 'Integration Reliability'
+
+	lineageTag: f448480e-d552-412f-9b59-bfd81de08149
+
+	measure 'Delivery Success Percentage' = DIVIDE(SUM('Integration Reliability'[Successful Deliveries]), SUM('Integration Reliability'[Delivery Count]))
+		formatString: 0.0%
+		lineageTag: c14377cf-b0e2-4587-9dd9-334c19eef3c5
+
+	measure 'Retry Percentage' = DIVIDE(SUM('Integration Reliability'[Retried Deliveries]), SUM('Integration Reliability'[Delivery Count]))
+		formatString: 0.0%
+		lineageTag: ccc18771-030f-4166-a5c4-bce3ddcb5907
+
+	measure 'Dead-Letter Count' = SUM('Integration Reliability'[Dead Letter Count Value])
+		formatString: #,0
+		lineageTag: 59422808-5c97-4bfa-adc2-268eab506c12
+
+	measure 'P95 Processing Time' = MAX('Integration Reliability'[P95 Processing Time Ms])
+		formatString: #,0 "ms"
+		lineageTag: 95344d29-03e6-41e3-8ab7-517a77fcf764
+
+	column 'Calendar Date'
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 475c1238-6694-448c-b76a-97ebd49c2d3a
+		summarizeBy: none
+		sourceColumn: calendar_date
+
+	column Channel
+		dataType: string
+		lineageTag: e63552a5-7cfb-4c12-a440-44fd22a4563a
+		summarizeBy: none
+		sourceColumn: channel_name
+
+	column 'Failure Reason'
+		dataType: string
+		lineageTag: 595f35fb-1ba9-448d-ac9c-cd97e0bec7be
+		summarizeBy: none
+		sourceColumn: failure_reason
+
+	column 'Delivery Count'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 975688ee-9177-4b86-8d65-b17430a6bb19
+		summarizeBy: sum
+		sourceColumn: delivery_count
+
+	column 'Successful Deliveries'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 886dd000-a269-4dc5-970b-c24ddac0981a
+		summarizeBy: sum
+		sourceColumn: successful_deliveries
+
+	column 'Retried Deliveries'
+		dataType: int64
+		formatString: #,0
+		lineageTag: a62ccdf7-9dd9-4bf4-aac7-0e89255c0c0b
+		summarizeBy: sum
+		sourceColumn: retried_deliveries
+
+	column 'Dead Letter Count Value'
+		dataType: int64
+		formatString: #,0
+		lineageTag: d2f03f01-cc44-477d-8b15-ceae79222e04
+		summarizeBy: sum
+		sourceColumn: dead_letter_count
+
+	column 'Average Processing Time Ms'
+		dataType: decimal
+		formatString: #,0
+		lineageTag: 499b58eb-4167-4ae7-870c-f5127fabec5f
+		summarizeBy: average
+		sourceColumn: average_processing_time_ms
+
+	column 'P95 Processing Time Ms'
+		dataType: decimal
+		formatString: #,0
+		lineageTag: b2434b25-f717-4257-8955-b9271bf5ca61
+		summarizeBy: max
+		sourceColumn: p95_processing_time_ms
+
+	partition 'Integration Reliability' = m
+		mode: import
+		queryGroup: 'Reporting Marts'
+		source =
+			let
+			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+			    Mart = Source{[Schema="mart",Item="vw_IntegrationReliability"]}[Data]
+			in
+			    Mart
+
+	annotation PBI_ResultType = Table

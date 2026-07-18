@@ -1,0 +1,29 @@
+{
+  "name": "LS_CaseLedgerPostgreSql",
+  "properties": {
+    "annotations": ["read-only analytics export views"],
+    "type": "AzurePostgreSql",
+    "typeProperties": {
+      "connectionString": {
+        "type": "AzureKeyVaultSecret",
+        "store": {
+          "referenceName": "LS_KeyVault",
+          "type": "LinkedServiceReference",
+          "parameters": {
+            "KeyVaultUrl": "@linkedService().KeyVaultUrl"
+          }
+        },
+        "secretName": "caseledger-postgresql-analytics-connection"
+      }
+    },
+    "parameters": {
+      "KeyVaultUrl": {
+        "type": "String"
+      }
+    },
+    "connectVia": {
+      "referenceName": "AutoResolveIntegrationRuntime",
+      "type": "IntegrationRuntimeReference"
+    }
+  }
+}

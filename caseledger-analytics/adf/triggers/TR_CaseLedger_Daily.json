@@ -1,0 +1,24 @@
+{
+  "name": "TR_CaseLedger_Daily",
+  "properties": {
+    "annotations": ["Enable only when Python orchestration is disabled for this environment"],
+    "runtimeState": "Stopped",
+    "pipelines": [
+      {
+        "pipelineReference": { "referenceName": "PL_CaseLedger_Incremental", "type": "PipelineReference" },
+        "parameters": {
+          "KeyVaultUrl": "https://replace-with-environment-vault.vault.azure.net/"
+        }
+      }
+    ],
+    "type": "ScheduleTrigger",
+    "typeProperties": {
+      "recurrence": {
+        "frequency": "Day",
+        "interval": 1,
+        "startTime": "2026-07-19T05:00:00Z",
+        "timeZone": "UTC"
+      }
+    }
+  }
+}

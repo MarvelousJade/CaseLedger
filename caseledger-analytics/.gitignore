@@ -1,0 +1,14 @@
+.env
+.venv/
+.tmp/
+tmp/
+__pycache__/
+.pytest_cache/
+pytest-cache-files-*/
+.ruff_cache/
+*.py[cod]
+artifacts/*.json
+artifacts/*.csv
+powerbi/**/.pbi/
+powerbi/**/cache.abf
+excel/previews/

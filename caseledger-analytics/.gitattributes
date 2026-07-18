@@ -1,0 +1,24 @@
+* text=auto
+
+.env.example text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+*.png binary
+*.pdf binary
+
+*.bicep text eol=lf
+*.bicepparam text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.pbip text eol=lf
+*.pbism text eol=lf
+*.pbir text eol=lf
+*.pq text eol=lf
+*.py text eol=lf
+*.sql text eol=lf
+*.tmdl text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf

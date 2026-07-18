@@ -1,0 +1,10 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/pages/pagesMetadata/1.0.0/schema.json",
+  "pageOrder": [
+    "OperationsOverview",
+    "AgingAndSLA",
+    "IntegrationReliability",
+    "PipelineAndDataQuality"
+  ],
+  "activePageName": "OperationsOverview"
+}

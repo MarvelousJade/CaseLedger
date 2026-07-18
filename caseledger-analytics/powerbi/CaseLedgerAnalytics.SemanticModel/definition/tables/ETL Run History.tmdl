@@ -1,0 +1,101 @@
+table 'ETL Run History'
+
+	lineageTag: b683cb4c-cda3-4dfc-ab00-53660a921683
+
+	measure 'ETL Success Percentage' = DIVIDE(CALCULATE(COUNTROWS('ETL Run History'), 'ETL Run History'[Status] = "Succeeded"), COUNTROWS('ETL Run History'))
+		formatString: 0.0%
+		lineageTag: 19f57321-7fef-4dcb-868e-d11a58709f2e
+
+	measure 'Average ETL Duration' = AVERAGE('ETL Run History'[Duration Ms])
+		formatString: #,0 "ms"
+		lineageTag: 4ec72da9-1de5-4aa6-bfd0-8c843a9d86fd
+
+	measure 'Rows Loaded' = SUM('ETL Run History'[Rows Loaded Value])
+		formatString: #,0
+		lineageTag: ed4f3bd1-e959-49f1-ab78-dd5881f16232
+
+	column 'Batch ID'
+		dataType: string
+		lineageTag: d4a4ae03-1b44-46b7-b0ce-4875fb986a1a
+		summarizeBy: none
+		sourceColumn: batch_id
+
+	column 'Pipeline Name'
+		dataType: string
+		lineageTag: daac90f8-ea4e-43d4-9dde-f131606d3e62
+		summarizeBy: none
+		sourceColumn: pipeline_name
+
+	column 'Started At'
+		dataType: dateTime
+		formatString: yyyy-mm-dd hh:mm:ss
+		lineageTag: 10455d59-dd2b-431a-81db-015f29473b8a
+		summarizeBy: none
+		sourceColumn: started_at
+
+	column 'Completed At'
+		dataType: dateTime
+		formatString: yyyy-mm-dd hh:mm:ss
+		lineageTag: d9f1ea3b-f24b-4a1c-9ce2-56592ac59569
+		summarizeBy: none
+		sourceColumn: completed_at
+
+	column 'High Watermark'
+		dataType: dateTime
+		formatString: yyyy-mm-dd hh:mm:ss
+		lineageTag: a9037a27-001a-42fb-95fc-c797d22e33ce
+		summarizeBy: none
+		sourceColumn: high_watermark
+
+	column 'Rows Extracted'
+		dataType: int64
+		formatString: #,0
+		lineageTag: e4410a39-984e-4917-8fcd-142af7f40e1c
+		summarizeBy: sum
+		sourceColumn: rows_extracted
+
+	column 'Rows Loaded Value'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 123da151-e5d1-4fed-aa6f-51e7da0dc55d
+		summarizeBy: sum
+		sourceColumn: rows_loaded
+
+	column 'Duration Ms'
+		dataType: int64
+		formatString: #,0
+		lineageTag: b7ae2067-9c2f-4cba-9b92-a80724262ba8
+		summarizeBy: average
+		sourceColumn: duration_ms
+
+	column Status
+		dataType: string
+		lineageTag: e09db5e1-4468-4553-8341-0489f29f0dcc
+		summarizeBy: none
+		sourceColumn: status
+
+	column 'Passed Checks'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 77b6b395-f125-4d56-97bc-77aebd785007
+		summarizeBy: sum
+		sourceColumn: passed_checks
+
+	column 'Failed Checks'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 4397d046-3613-44c1-a9b3-c514595c248c
+		summarizeBy: sum
+		sourceColumn: failed_checks
+
+	partition 'ETL Run History' = m
+		mode: import
+		queryGroup: 'Reporting Marts'
+		source =
+			let
+			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+			    Mart = Source{[Schema="mart",Item="vw_ETLRunHistory"]}[Data]
+			in
+			    Mart
+
+	annotation PBI_ResultType = Table

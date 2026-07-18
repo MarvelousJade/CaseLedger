@@ -1,0 +1,68 @@
+table 'Data Quality'
+
+	lineageTag: 22259a54-f86d-4822-be84-8febc70c92f2
+
+	measure 'Failed Quality Checks' = CALCULATE(COUNTROWS('Data Quality'), 'Data Quality'[Passed] = FALSE())
+		formatString: #,0
+		lineageTag: 36287439-028b-4d4f-9493-c9aedf49dbbc
+
+	column 'Batch ID'
+		dataType: string
+		lineageTag: 1db6e678-b578-45e1-a0e9-1eda5b48570a
+		summarizeBy: none
+		sourceColumn: batch_id
+
+	column 'Pipeline Name'
+		dataType: string
+		lineageTag: fa6ce82b-9654-4ccc-89c6-ac08dd44b24b
+		summarizeBy: none
+		sourceColumn: pipeline_name
+
+	column Check
+		dataType: string
+		lineageTag: ed7bcfc2-5366-481e-9af3-fb5f32d2df74
+		summarizeBy: none
+		sourceColumn: check_name
+
+	column Expected
+		dataType: string
+		lineageTag: c7d6b77d-2c9a-4ef9-b599-6e9698d22356
+		summarizeBy: none
+		sourceColumn: expected_value
+
+	column Actual
+		dataType: string
+		lineageTag: d8502128-0c9d-4bf7-814d-ff4f7c2d6970
+		summarizeBy: none
+		sourceColumn: actual_value
+
+	column Passed
+		dataType: boolean
+		lineageTag: 75c377bd-32ca-4618-9148-b759b531918c
+		summarizeBy: none
+		sourceColumn: passed
+
+	column Details
+		dataType: string
+		lineageTag: b6303c0d-31bd-4d5d-9872-5e77ba875d7a
+		summarizeBy: none
+		sourceColumn: details
+
+	column 'Executed At'
+		dataType: dateTime
+		formatString: yyyy-mm-dd hh:mm:ss
+		lineageTag: 5d6b3062-ea8c-4595-a142-9aef45877c51
+		summarizeBy: none
+		sourceColumn: executed_at
+
+	partition 'Data Quality' = m
+		mode: import
+		queryGroup: 'Reporting Marts'
+		source =
+			let
+			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+			    Mart = Source{[Schema="mart",Item="vw_DataQuality"]}[Data]
+			in
+			    Mart
+
+	annotation PBI_ResultType = Table

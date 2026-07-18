@@ -1,0 +1,63 @@
+table 'SLA Compliance'
+
+	lineageTag: 00c13ff6-447a-4849-99d8-a24f76e52ee9
+
+	measure 'SLA Compliance Percentage' = DIVIDE(SUM('SLA Compliance'[Compliant Cases]), SUM('SLA Compliance'[Evaluated Cases]))
+		formatString: 0.0%
+		lineageTag: a63c9144-8b76-42dc-aa4e-7002ed216d31
+
+	measure 'SLA Breach Count' = SUM('SLA Compliance'[Breached Cases])
+		formatString: #,0
+		lineageTag: e31bff88-c34c-4573-8e58-563f31476653
+
+	column 'Snapshot Date'
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 08cac43b-a761-40aa-a2b2-c0275567999d
+		summarizeBy: none
+		sourceColumn: snapshot_date
+
+	column 'Service Tier'
+		dataType: string
+		lineageTag: 9d91690b-aaee-466d-9b9e-9c1aba0aa680
+		summarizeBy: none
+		sourceColumn: service_tier
+
+	column Category
+		dataType: string
+		lineageTag: 0b37bfa0-bc11-4481-98d0-28466f87a4b8
+		summarizeBy: none
+		sourceColumn: category_name
+
+	column 'Evaluated Cases'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 166dd7dc-ef0f-4e1a-a851-b0b8f28d5b43
+		summarizeBy: sum
+		sourceColumn: evaluated_cases
+
+	column 'Compliant Cases'
+		dataType: int64
+		formatString: #,0
+		lineageTag: 223fdbd0-b252-474d-9cec-8a4564f18e77
+		summarizeBy: sum
+		sourceColumn: compliant_cases
+
+	column 'Breached Cases'
+		dataType: int64
+		formatString: #,0
+		lineageTag: f8cbeed0-c1bf-4df8-a0ee-919c92a7295d
+		summarizeBy: sum
+		sourceColumn: breached_cases
+
+	partition 'SLA Compliance' = m
+		mode: import
+		queryGroup: 'Reporting Marts'
+		source =
+			let
+			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+			    Mart = Source{[Schema="mart",Item="vw_SLACompliance"]}[Data]
+			in
+			    Mart
+
+	annotation PBI_ResultType = Table

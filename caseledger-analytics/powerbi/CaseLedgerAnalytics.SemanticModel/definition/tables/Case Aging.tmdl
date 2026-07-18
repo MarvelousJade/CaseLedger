@@ -1,0 +1,102 @@
+table 'Case Aging'
+
+	lineageTag: e554e737-da62-4864-afd9-d6330a8c8d91
+
+	measure 'Average Case Age' = AVERAGE('Case Aging'[Age Days])
+		formatString: 0.0
+		lineageTag: 33045246-a81a-408f-922d-13e704ac8ee9
+
+	measure 'Median Case Age' = MEDIAN('Case Aging'[Age Days])
+		formatString: 0.0
+		lineageTag: cb2a9833-5558-4b9f-b8b4-f839559000a8
+
+	measure 'Average First Response Time' = AVERAGE('Case Aging'[First Response Minutes])
+		formatString: 0.0
+		lineageTag: c34b292b-6469-411e-8610-f8a210ebfd53
+
+	column 'Snapshot Date'
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 959cf398-73b7-4497-b85e-cd0d105b00ab
+		summarizeBy: none
+		sourceColumn: snapshot_date
+
+	column 'Case Reference'
+		dataType: string
+		lineageTag: f138ef92-44eb-4332-af6a-dd775ee96c21
+		summarizeBy: none
+		sourceColumn: case_reference
+
+	column 'Case Title'
+		dataType: string
+		lineageTag: ec0b7774-0f17-460d-b0e6-a370f18bc450
+		summarizeBy: none
+		sourceColumn: case_title
+
+	column Status
+		dataType: string
+		lineageTag: 313920db-40bb-4e0a-8f72-9b845b6a4289
+		summarizeBy: none
+		sourceColumn: status_name
+
+	column Category
+		dataType: string
+		lineageTag: 29cfc80c-9041-4199-b09b-8988ff2f5c78
+		summarizeBy: none
+		sourceColumn: category_name
+
+	column Priority
+		dataType: string
+		lineageTag: 596d74ba-6313-4885-814a-c2ccb8bdbcb3
+		summarizeBy: none
+		sourceColumn: priority_name
+
+	column Team
+		dataType: string
+		lineageTag: 3148f491-7eb5-4259-9d84-c2c8e0b4b480
+		summarizeBy: none
+		sourceColumn: assigned_team
+
+	column 'Service Tier'
+		dataType: string
+		lineageTag: 0968fd2a-f4e4-423f-a9cd-db6d6b4ffced
+		summarizeBy: none
+		sourceColumn: service_tier
+
+	column 'Age Days'
+		dataType: int64
+		formatString: 0
+		lineageTag: a485b6cf-2f70-4d51-a10a-a792af258931
+		summarizeBy: average
+		sourceColumn: age_days
+
+	column 'Aging Bucket'
+		dataType: string
+		lineageTag: d0531e24-b978-4001-958c-51c13bcd109a
+		summarizeBy: none
+		sourceColumn: aging_bucket
+
+	column 'SLA Breached'
+		dataType: boolean
+		lineageTag: 8109edbd-804f-4dc7-8730-604f1575ed29
+		summarizeBy: none
+		sourceColumn: is_sla_breached
+
+	column 'First Response Minutes'
+		dataType: int64
+		formatString: 0
+		lineageTag: 4c12b0b4-8ad6-4a7c-97cf-a71c3dbcb425
+		summarizeBy: average
+		sourceColumn: first_response_minutes
+
+	partition 'Case Aging' = m
+		mode: import
+		queryGroup: 'Reporting Marts'
+		source =
+			let
+			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+			    Mart = Source{[Schema="mart",Item="vw_CaseAging"]}[Data]
+			in
+			    Mart
+
+	annotation PBI_ResultType = Table

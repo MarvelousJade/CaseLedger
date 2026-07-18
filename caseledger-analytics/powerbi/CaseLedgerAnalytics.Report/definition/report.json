@@ -1,0 +1,27 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/report/3.1.0/schema.json",
+  "themeCollection": {
+    "baseTheme": {
+      "name": "CY25SU06",
+      "reportVersionAtImport": "5.69",
+      "type": 2
+    }
+  },
+  "resourcePackages": [],
+  "settings": {
+    "useStylableVisualContainerHeader": true,
+    "exportDataMode": 1,
+    "defaultDrillFilterOtherVisuals": true,
+    "allowChangeFilterTypes": true
+  },
+  "annotations": [
+    {
+      "name": "caseledger.metricCatalog",
+      "value": "../../docs/metric-catalog.md"
+    },
+    {
+      "name": "caseledger.accessibilityPalette",
+      "value": "navy=#0B1F33;blue=#2F6BFF;teal=#007C83;amber=#D97706;red=#C73E1D"
+    }
+  ]
+}

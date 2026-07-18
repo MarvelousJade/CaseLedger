@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "caseledger-analytics"
+version = "0.1.0"
+description = "Incremental PostgreSQL-to-SQL Server analytics platform for CaseLedger."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "pandas>=2.2,<3",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic-settings>=2.7,<3",
+  "pyodbc>=5.2,<6",
+  "SQLAlchemy>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.9,<1",
+]
+artifacts = [
+  "pdfplumber>=0.11,<1",
+  "pypdf>=6,<7",
+  "reportlab>=5,<6",
+]
+
+[project.scripts]
+caseledger-analytics = "etl.pipeline:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/etl"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers"
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+  "integration: requires the Docker PostgreSQL and SQL Server services",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

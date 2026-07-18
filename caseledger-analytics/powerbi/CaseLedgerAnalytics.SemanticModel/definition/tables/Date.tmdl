@@ -1,0 +1,57 @@
+table Date
+
+	lineageTag: 10ca1602-4815-48e9-bfa9-8e4e853dadbe
+
+	column Date
+		dataType: dateTime
+		formatString: yyyy-mm-dd
+		lineageTag: 17b85c2e-cd36-4d60-8c4c-0af6ce36c6d8
+		summarizeBy: none
+		sourceColumn: calendar_date
+
+	column Year
+		dataType: int64
+		formatString: 0
+		lineageTag: 547285d5-5820-4318-9cf4-56c111b603a7
+		summarizeBy: none
+		sourceColumn: calendar_year
+
+	column Quarter
+		dataType: int64
+		formatString: 0
+		lineageTag: 85e545f3-1be3-4934-a1ec-a7d8e66e6cf9
+		summarizeBy: none
+		sourceColumn: calendar_quarter
+
+	column 'Month Number'
+		dataType: int64
+		formatString: 0
+		lineageTag: f50b34a4-3486-4bc6-ad23-fc87152e029e
+		summarizeBy: none
+		sourceColumn: month_number
+
+	column Month
+		dataType: string
+		lineageTag: ec1b0c0e-fabd-4b5d-ab9c-5ccfd8a1fa04
+		summarizeBy: none
+		sourceColumn: month_name
+		sortByColumn: 'Month Number'
+
+	column 'Week of Year'
+		dataType: int64
+		formatString: 0
+		lineageTag: 41400d72-e448-4527-91fb-6f8225226245
+		summarizeBy: none
+		sourceColumn: week_of_year
+
+	partition Date = m
+		mode: import
+		queryGroup: 'Reporting Marts'
+		source =
+			let
+			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+			    Mart = Source{[Schema="mart",Item="vw_Date"]}[Data]
+			in
+			    Mart
+
+	annotation PBI_ResultType = Table

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/page/2.0.0/schema.json",
+  "name": "OperationsOverview",
+  "displayName": "Operations Overview",
+  "displayOption": "FitToPage",
+  "height": 720,
+  "width": 1280,
+  "filterConfig": { "filters": [] },
+  "annotations": [
+    { "name": "caseledger.design", "value": "Opened, closed, backlog EOD, average and median age, status/category distribution, date/category/status slicers" },
+    { "name": "caseledger.preview", "value": "../../../docs/screenshots/01-operations-overview.png" }
+  ],
+  "visualInteractions": []
+}
