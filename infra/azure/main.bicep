@@ -110,16 +110,16 @@ param postgresBackupRetentionDays int = 14
 ])
 param postgresHighAvailabilityMode string = 'Disabled'
 
-@description('Minimum number of API replicas.')
-@minValue(1)
+@description('Minimum number of API replicas. Non-production environments may use zero so HTTP ingress can scale the API to zero when idle.')
+@minValue(0)
 param apiMinReplicas int = 1
 
 @description('Maximum number of API replicas. Keep this at one until SignalR uses a distributed backplane and result consumption is coordinated across replicas.')
 @minValue(1)
 param apiMaxReplicas int = 1
 
-@description('Minimum number of worker replicas. Keep at least one replica for durable result-outbox recovery.')
-@minValue(1)
+@description('Minimum number of worker replicas. Keep at least one during rehearsals and in production for durable result-outbox recovery. Zero is supported only with the configured Service Bus scale rule.')
+@minValue(0)
 param workerMinReplicas int = 1
 
 @description('Maximum number of worker replicas.')

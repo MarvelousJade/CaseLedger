@@ -8,6 +8,11 @@ import type {
   DashboardData,
   Evidence,
   IntegrityResult,
+  OperationalFailure,
+  OperationalFailureCollection,
+  OperationalFailureKind,
+  OperationalReplay,
+  OperationalReplayInput,
   User,
 } from './types'
 
@@ -21,10 +26,50 @@ class ApiError extends Error {
   }
 }
 
+const antiforgeryHeaderName = 'X-CSRF-TOKEN'
+const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE'])
+let antiforgeryTokenRequest: Promise<string> | null = null
+
+async function acquireAntiforgeryToken(): Promise<string> {
+  const response = await fetch('/api/auth/antiforgery', {
+    method: 'GET',
+    credentials: 'include',
+    cache: 'no-store',
+    headers: { Accept: 'application/json' },
+  })
+
+  if (!response.ok) {
+    throw new ApiError('Unable to secure this request. Please try again.', response.status)
+  }
+
+  const payload = asRecord(await response.json().catch(() => null))
+  const token = readString(payload, ['token'])
+  if (!token) {
+    throw new ApiError('The server did not issue a request security token.', response.status)
+  }
+
+  return token
+}
+
+function getAntiforgeryToken(): Promise<string> {
+  if (!antiforgeryTokenRequest) {
+    antiforgeryTokenRequest = acquireAntiforgeryToken()
+      .finally(() => {
+        antiforgeryTokenRequest = null
+      })
+  }
+
+  return antiforgeryTokenRequest
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
+  }
+  const method = (init.method ?? 'GET').toUpperCase()
+  if (!safeMethods.has(method) && !headers.has(antiforgeryHeaderName)) {
+    headers.set(antiforgeryHeaderName, await getAntiforgeryToken())
   }
 
   const response = await fetch(path, {
@@ -157,6 +202,63 @@ function normaliseAuditVerificationJob(value: unknown): AuditVerificationJob {
     requestedAt: readDate(record, ['requestedAt']),
     completedAt: readString(record, ['completedAt']) || undefined,
     isCurrent: readBoolean(record, ['isCurrent']),
+  }
+}
+
+function normaliseOperationalFailureKind(value: unknown): OperationalFailureKind {
+  const kind = typeof value === 'string' ? value : ''
+  return kind === 'verification-request' || kind === 'webhook-delivery'
+    ? kind
+    : 'verification-job'
+}
+
+function normaliseOperationalFailure(value: unknown): OperationalFailure {
+  const record = asRecord(value)
+  const attemptCount = record.attemptCount
+  return {
+    kind: normaliseOperationalFailureKind(record.kind),
+    id: readString(record, ['id']),
+    caseId: readString(record, ['caseId']) || undefined,
+    caseReference: readString(record, ['caseReference']) || undefined,
+    verificationJobId: readString(record, ['verificationJobId']) || undefined,
+    occurredAt: readString(record, ['occurredAt']),
+    deadLetteredAt: readString(record, ['deadLetteredAt']) || undefined,
+    attemptCount: attemptCount === null || attemptCount === undefined
+      ? undefined
+      : readNumber(record, ['attemptCount']),
+    errorCode: readString(record, ['errorCode']) || undefined,
+    replayable: readBoolean(record, ['replayable']),
+    replayBlockedReason: readString(record, ['replayBlockedReason']) || undefined,
+  }
+}
+
+function normaliseOperationalFailureCollection(value: unknown): OperationalFailureCollection {
+  const wrapper = asRecord(value)
+  const record = asRecord(wrapper.data ?? value)
+  const items = Array.isArray(record.items)
+    ? record.items.map(normaliseOperationalFailure)
+    : []
+  const total = readNumber(record, ['total'], items.length)
+  const page = readNumber(record, ['page'], 1)
+  const pageSize = readNumber(record, ['pageSize'], items.length || 50)
+  return {
+    items,
+    total,
+    page,
+    pageSize,
+    totalPages: readNumber(record, ['totalPages'], total ? Math.ceil(total / pageSize) : 0),
+  }
+}
+
+function normaliseOperationalReplay(value: unknown): OperationalReplay {
+  const wrapper = asRecord(value)
+  const record = asRecord(wrapper.replay ?? wrapper.data ?? value)
+  return {
+    replayId: readString(record, ['replayId', 'id']),
+    kind: normaliseOperationalFailureKind(record.kind),
+    sourceId: readString(record, ['sourceId']),
+    sourceDeadLetteredAt: readString(record, ['sourceDeadLetteredAt']),
+    replayedAt: readString(record, ['replayedAt']),
   }
 }
 
@@ -347,6 +449,39 @@ export const api = {
   async getLatestAuditVerification(id: string) {
     return normaliseAuditVerificationJob(
       await request<unknown>(`/api/cases/${encodeURIComponent(id)}/audit/verifications/latest`),
+    )
+  },
+
+  async getOperationalFailures(filters: {
+    kind?: OperationalFailureKind | ''
+    page?: number
+    pageSize?: number
+  } = {}) {
+    const params = new URLSearchParams()
+    if (filters.kind) params.set('kind', filters.kind)
+    if (filters.page !== undefined) params.set('page', String(filters.page))
+    if (filters.pageSize !== undefined) params.set('pageSize', String(filters.pageSize))
+    const query = params.size ? `?${params.toString()}` : ''
+    return normaliseOperationalFailureCollection(
+      await request<unknown>(`/api/admin/operations/failures${query}`),
+    )
+  },
+
+  async replayVerificationRequest(id: string, input: OperationalReplayInput) {
+    return normaliseOperationalReplay(
+      await request<unknown>(
+        `/api/admin/operations/verification-requests/${encodeURIComponent(id)}/replay`,
+        { method: 'POST', body: JSON.stringify(input) },
+      ),
+    )
+  },
+
+  async replayWebhook(id: string, input: OperationalReplayInput) {
+    return normaliseOperationalReplay(
+      await request<unknown>(
+        `/api/admin/operations/webhooks/${encodeURIComponent(id)}/replay`,
+        { method: 'POST', body: JSON.stringify(input) },
+      ),
     )
   },
 

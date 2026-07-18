@@ -24,13 +24,37 @@ public sealed class ApiContractTests
         var paths = root.GetProperty("paths");
         Assert.True(paths.TryGetProperty("/api/cases", out var casesPath));
         Assert.True(casesPath.TryGetProperty("get", out var listOperation));
-        Assert.True(casesPath.TryGetProperty("post", out _));
+        Assert.True(casesPath.TryGetProperty("post", out var createOperation));
+        var antiforgeryParameter = Assert.Single(
+            createOperation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() ==
+                ApiTestHelpers.AntiforgeryHeaderName);
+        Assert.True(antiforgeryParameter.GetProperty("required").GetBoolean());
+        Assert.Contains(
+            "/api/auth/antiforgery",
+            antiforgeryParameter.GetProperty("description").GetString(),
+            StringComparison.Ordinal);
         Assert.Contains(
             listOperation.GetProperty("parameters").EnumerateArray(),
             parameter => parameter.GetProperty("name").GetString() == "page");
         Assert.Contains(
             listOperation.GetProperty("parameters").EnumerateArray(),
             parameter => parameter.GetProperty("name").GetString() == "pageSize");
+        Assert.DoesNotContain(
+            listOperation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() ==
+                ApiTestHelpers.AntiforgeryHeaderName);
+
+        var antiforgeryTokenOperation = paths
+            .GetProperty("/api/auth/antiforgery")
+            .GetProperty("get");
+        if (antiforgeryTokenOperation.TryGetProperty("parameters", out var tokenParameters))
+        {
+            Assert.DoesNotContain(
+                tokenParameters.EnumerateArray(),
+                parameter => parameter.GetProperty("name").GetString() ==
+                    ApiTestHelpers.AntiforgeryHeaderName);
+        }
 
         var casePath = paths.GetProperty("/api/cases/{id}");
         var patchOperation = casePath.GetProperty("patch");
@@ -74,6 +98,17 @@ public sealed class ApiContractTests
         var uiResponse = await client.GetAsync("/swagger/index.html");
         uiResponse.EnsureSuccessStatusCode();
         Assert.Equal("text/html", uiResponse.Content.Headers.ContentType?.MediaType);
+        var ui = await uiResponse.Content.ReadAsStringAsync();
+        Assert.Contains("index.js", ui, StringComparison.Ordinal);
+
+        var initializerResponse = await client.GetAsync("/swagger/index.js");
+        initializerResponse.EnsureSuccessStatusCode();
+        Assert.Equal(
+            "application/javascript",
+            initializerResponse.Content.Headers.ContentType?.MediaType);
+        var initializer = await initializerResponse.Content.ReadAsStringAsync();
+        Assert.Contains("/api/auth/antiforgery", initializer, StringComparison.Ordinal);
+        Assert.Contains(ApiTestHelpers.AntiforgeryHeaderName, initializer, StringComparison.Ordinal);
     }
 
     [Fact]

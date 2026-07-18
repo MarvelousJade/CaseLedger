@@ -23,6 +23,12 @@ public enum AuditVerificationJobStatus
     DeadLettered
 }
 
+public enum OperationalReplayKind
+{
+    VerificationRequest,
+    WebhookDelivery
+}
+
 public sealed class User
 {
     public Guid Id { get; set; }
@@ -156,4 +162,18 @@ public sealed class WebhookDelivery
     public Guid? LockId { get; set; }
     public DateTime? LockedUntil { get; set; }
     public string? LastErrorCode { get; set; }
+}
+
+public sealed class OperationalReplay
+{
+    public Guid Id { get; set; }
+    public OperationalReplayKind Kind { get; set; }
+    public Guid SourceId { get; set; }
+    public DateTime SourceDeadLetteredAt { get; set; }
+    public Guid ActorId { get; set; }
+    public User Actor { get; set; } = null!;
+    public DateTime ReplayedAt { get; set; }
+    public int PreviousAttemptCount { get; set; }
+    public string? PreviousErrorCode { get; set; }
+    public string Reason { get; set; } = string.Empty;
 }

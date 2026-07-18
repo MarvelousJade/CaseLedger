@@ -4,13 +4,13 @@ param(
     [string] $SubscriptionId,
 
     [Parameter()]
-    [string] $ResourceGroup = 'caseledger-prod',
+    [string] $ResourceGroup,
 
     [Parameter()]
     [string] $Location = 'canadacentral',
 
     [Parameter()]
-    [string] $IdentityName = 'caseledger-github-deploy',
+    [string] $IdentityName,
 
     [Parameter()]
     [string] $GitHubOwner = 'MarvelousJade',
@@ -19,10 +19,39 @@ param(
     [string] $GitHubRepository = 'CaseLedger',
 
     [Parameter()]
+    [ValidateSet('azure-production', 'azure-staging', 'azure-dev')]
     [string] $GitHubEnvironment = 'azure-production'
 )
 
 $ErrorActionPreference = 'Stop'
+
+$environmentDefaults = switch ($GitHubEnvironment) {
+    'azure-production' {
+        @{
+            ResourceGroup = 'caseledger-prod'
+            IdentityName = 'caseledger-github-deploy'
+        }
+    }
+    'azure-staging' {
+        @{
+            ResourceGroup = 'caseledger-staging'
+            IdentityName = 'caseledger-github-staging-deploy'
+        }
+    }
+    'azure-dev' {
+        @{
+            ResourceGroup = 'caseledger-dev'
+            IdentityName = 'caseledger-github-dev-deploy'
+        }
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ResourceGroup)) {
+    $ResourceGroup = $environmentDefaults.ResourceGroup
+}
+if ([string]::IsNullOrWhiteSpace($IdentityName)) {
+    $IdentityName = $environmentDefaults.IdentityName
+}
 
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     throw 'Azure CLI is required. Reopen PowerShell after installing it.'
@@ -42,6 +71,13 @@ if ([string]::IsNullOrWhiteSpace($SubscriptionId)) {
 if ($LASTEXITCODE -ne 0) {
     throw 'The requested Azure subscription could not be selected.'
 }
+
+$selectedAccount = & az account show --output json 2>$null
+if ($LASTEXITCODE -ne 0) {
+    throw 'The selected Azure subscription could not be read after selection.'
+}
+$accountDetails = $selectedAccount | ConvertFrom-Json
+$SubscriptionId = $accountDetails.id
 
 & az group create `
     --name $ResourceGroup `
@@ -84,13 +120,13 @@ foreach ($role in @('Contributor', 'Role Based Access Control Administrator')) {
     }
 }
 
-$credentialName = 'github-azure-production'
+$credentialName = "github-$GitHubEnvironment"
 $subject = "repo:${GitHubOwner}/${GitHubRepository}:environment:${GitHubEnvironment}"
-& az identity federated-credential show `
+$credentialJson = & az identity federated-credential show `
     --resource-group $ResourceGroup `
     --identity-name $IdentityName `
     --name $credentialName `
-    --output none `
+    --output json `
     2>$null
 if ($LASTEXITCODE -ne 0) {
     & az identity federated-credential create `
@@ -102,6 +138,14 @@ if ($LASTEXITCODE -ne 0) {
         --audiences 'api://AzureADTokenExchange' `
         --only-show-errors `
         --output none
+}
+else {
+    $credential = $credentialJson | ConvertFrom-Json
+    if ($credential.subject -ne $subject -or
+        $credential.issuer -ne 'https://token.actions.githubusercontent.com' -or
+        $credential.audiences -notcontains 'api://AzureADTokenExchange') {
+        throw "Federated credential '$credentialName' exists but does not match the requested GitHub environment subject. Remove or rename it after reviewing the existing trust relationship."
+    }
 }
 if ($LASTEXITCODE -ne 0) {
     throw 'The GitHub federated credential could not be created.'
@@ -116,4 +160,7 @@ $result = [ordered]@{
 
 Write-Host 'OIDC bootstrap completed. Add these values as secrets in the protected GitHub environment:'
 $result | ConvertTo-Json
-Write-Host 'Also add strong AZURE_POSTGRES_ADMIN_PASSWORD and CASELEDGER_SEED_ADMIN_PASSWORD environment secrets.'
+Write-Host "Add AZURE_RESOURCE_GROUP='$ResourceGroup' as a variable in that same protected GitHub environment."
+Write-Host 'Also add a strong AZURE_POSTGRES_ADMIN_PASSWORD environment secret.'
+Write-Host 'For Entra authentication, add the separate CaseLedger app-registration variables and CASELEDGER_ENTRA_CLIENT_SECRET documented in infra/azure/README.md.'
+Write-Host 'For Demo authentication, add distinct CASELEDGER_SEED_ADMIN_PASSWORD and CASELEDGER_SEED_ANALYST_PASSWORD secrets.'

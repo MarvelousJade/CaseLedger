@@ -4,6 +4,8 @@ namespace CaseLedger.Api.Contracts;
 
 public sealed record LoginRequest(string? Email, string? Password);
 
+public sealed record AntiforgeryTokenResponse(string Token);
+
 public sealed record AuthCapabilitiesResponse(
     bool DemoLoginEnabled,
     bool EntraEnabled,

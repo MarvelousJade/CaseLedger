@@ -61,9 +61,13 @@ messaging is disabled, the client calls the synchronous `/audit/verify` endpoint
 
 ### ASP.NET Core API
 
-The API owns cookie sessions and role claims, Problem Details responses, case validation and ETag
-preconditions, EF Core persistence, audit creation, GraphQL dashboard aggregation, OpenAPI,
-structured logs, and OpenTelemetry instrumentation.
+The API owns cookie sessions and role claims, identity-bound anti-forgery validation, Problem Details
+responses, case validation and ETag preconditions, EF Core persistence, audit creation, GraphQL
+dashboard aggregation, OpenAPI, structured logs, and OpenTelemetry instrumentation. An anonymous
+token endpoint pairs a request token with an HTTP-only antiforgery cookie; every unsafe `/api`
+request and the GraphQL POST require the matching header. The React client and bundled Swagger UI
+obtain the token automatically, including before login and again after the authenticated identity
+changes.
 
 Evidence uploads are streamed through a bounded temporary file while the API computes SHA-256 and
 the actual byte count. The API then writes the object before committing its evidence row and audit
@@ -100,6 +104,7 @@ Important persistence invariants include:
 - unique terminal verification `ResultId` values;
 - one webhook delivery per verification job and result;
 - leased API outbox and webhook rows for safe concurrent dispatch;
+- one durable operator replay record per failure kind, source ID, and observed dead-letter time;
 - a separate worker-owned `audit_worker` PostgreSQL schema.
 
 The worker transaction inserts a `jobId` inbox row and deterministic result-outbox row together.
@@ -206,6 +211,15 @@ Delivery is intentionally at least once across each network boundary:
 Exactly-once side effects are not assumed. A process can publish successfully and stop before
 marking its outbox row, so every downstream consumer must remain idempotent.
 
+The Admin Operations surface lists only redacted API-owned request-outbox, terminal verification,
+and webhook failures. Request and webhook replay require the exact observed dead-letter timestamp,
+an eligible non-terminal source row, no active lease, and an operator reason. The transaction keeps
+the original message/delivery ID and payload, resets its retry budget, and inserts an
+`OperationalReplay` audit row containing the actor and previous failure state. Terminal worker jobs
+are immutable and non-replayable; a new verification must use a new job. Broker-native request and
+result DLQs remain owned by RabbitMQ or Azure Service Bus because malformed or conflicting messages
+can poison-loop if replayed blindly.
+
 ## Authentication, key protection, telemetry, and privacy
 
 Passwords use PBKDF2-SHA256 with per-password random salts and fixed-time verification. Successful
@@ -216,6 +230,9 @@ passwords must be supplied through configuration; disabling it rotates the store
 prevents local login. Public credential hints are a separate capability enabled only by deliberate
 demo manifests. Cookie principals are revalidated against the current active/local-login state on
 every request, and changed roles replace and renew the session principal.
+Unsafe browser requests also require a matching `X-CSRF-TOKEN` header and HTTP-only, SameSite=Strict
+antiforgery cookie. Tokens are identity-bound, so the client reacquires one after login before its
+next mutation.
 
 Optional Microsoft Entra OIDC validates the configured tenant and resolves a session only through
 the immutable `(tenant ID, object ID)` external-identity mapping. It never links by an email or

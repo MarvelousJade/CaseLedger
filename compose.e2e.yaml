@@ -27,8 +27,8 @@ services:
       start_period: 20s
       retries: 30
     ports:
-      - "127.0.0.1:5673:5672"
-      - "127.0.0.1:15673:15672"
+      - "127.0.0.1:${CASELEDGER_E2E_RABBITMQ_PORT:-5673}:5672"
+      - "127.0.0.1:${CASELEDGER_E2E_RABBITMQ_MANAGEMENT_PORT:-15673}:15672"
     volumes:
       - e2e-rabbitmq-data:/var/lib/rabbitmq
 
@@ -39,7 +39,7 @@ services:
     environment:
       WEBHOOK_SIGNING_SECRET: caseledger-e2e-webhook-signing-secret
     ports:
-      - "127.0.0.1:5154:8082"
+      - "127.0.0.1:${CASELEDGER_E2E_WEBHOOK_PORT:-5154}:8082"
 
   app:
     build:
@@ -68,7 +68,7 @@ services:
       webhook-receiver:
         condition: service_healthy
     ports:
-      - "127.0.0.1:5151:8080"
+      - "127.0.0.1:${CASELEDGER_E2E_APP_PORT:-5151}:8080"
     volumes:
       - e2e-app-data:/data
 

@@ -5,6 +5,7 @@ using CaseLedger.Api.Data;
 using CaseLedger.Api.Domain;
 using CaseLedger.Api.Services;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -15,10 +16,16 @@ public static class ApiEndpoints
 {
     public static IEndpointRouteBuilder MapCaseLedgerApi(this IEndpointRouteBuilder endpoints)
     {
-        var api = endpoints.MapGroup("/api");
+        var api = endpoints.MapGroup("/api")
+            .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
         var auth = api.MapGroup("/auth")
             .WithTags("Authentication");
 
+        auth.MapGet("/antiforgery", GetAntiforgeryToken)
+            .AllowAnonymous()
+            .WithName("GetAntiforgeryToken")
+            .WithSummary("Issue a request token for browser state-changing requests")
+            .Produces<AntiforgeryTokenResponse>(StatusCodes.Status200OK);
         auth.MapGet("/capabilities", GetAuthCapabilities)
             .AllowAnonymous()
             .WithName("GetAuthCapabilities")
@@ -68,6 +75,7 @@ public static class ApiEndpoints
             .Produces<UserResponse[]>()
             .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
             .Produces(StatusCodes.Status429TooManyRequests);
+        api.MapAdminOperationsEndpoints();
         api.MapCaseEndpoints();
 
         return endpoints;
@@ -92,6 +100,18 @@ public static class ApiEndpoints
             options.Value.DemoLoginEnabled,
             options.Value.Entra.Enabled,
             options.Value.ShowDemoCredentials));
+
+    private static IResult GetAntiforgeryToken(
+        HttpContext context,
+        IAntiforgery antiforgery)
+    {
+        var tokens = antiforgery.GetAndStoreTokens(context);
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers.Pragma = "no-cache";
+        return Results.Ok(new AntiforgeryTokenResponse(
+            tokens.RequestToken ?? throw new InvalidOperationException(
+                "The antiforgery service did not issue a request token.")));
+    }
 
     private static IResult BeginEntraLogin(
         [FromQuery] string? returnUrl,

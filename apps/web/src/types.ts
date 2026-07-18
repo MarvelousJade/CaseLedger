@@ -95,6 +95,46 @@ export interface AuditVerificationJob {
   isCurrent: boolean
 }
 
+export type OperationalFailureKind =
+  | 'verification-request'
+  | 'verification-job'
+  | 'webhook-delivery'
+
+export interface OperationalFailure {
+  kind: OperationalFailureKind
+  id: string
+  caseId?: string
+  caseReference?: string
+  verificationJobId?: string
+  occurredAt: string
+  deadLetteredAt?: string
+  attemptCount?: number
+  errorCode?: string
+  replayable: boolean
+  replayBlockedReason?: string
+}
+
+export interface OperationalFailureCollection {
+  items: OperationalFailure[]
+  total: number
+  page: number
+  pageSize: number
+  totalPages: number
+}
+
+export interface OperationalReplayInput {
+  deadLetteredAt: string
+  reason: string
+}
+
+export interface OperationalReplay {
+  replayId: string
+  kind: OperationalFailureKind
+  sourceId: string
+  sourceDeadLetteredAt: string
+  replayedAt: string
+}
+
 export interface VerificationUpdated {
   jobId: string
   caseId: string

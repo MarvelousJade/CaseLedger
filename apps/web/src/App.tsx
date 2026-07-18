@@ -9,9 +9,10 @@ import { LoginPage } from './components/LoginPage'
 import { CasesPage } from './pages/CasesPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { IntegrityPage } from './pages/IntegrityPage'
+import { OperationsPage } from './pages/OperationsPage'
 import './App.css'
 
-type View = 'dashboard' | 'cases' | 'integrity'
+type View = 'dashboard' | 'cases' | 'integrity' | 'operations'
 
 const unavailableAuthCapabilities: AuthCapabilities = {
   demoLoginEnabled: false,
@@ -89,10 +90,12 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => Promise<voi
   }
   const notify = (message: string, kind: 'success' | 'danger' = 'success') => setToast({ kind, message })
   const refresh = () => setRefreshKey((current) => current + 1)
+  const isAdmin = user.role === 'Admin'
   const navItems: { id: View; label: string; icon: IconName }[] = [
     { id: 'dashboard', label: 'Overview', icon: 'dashboard' },
     { id: 'cases', label: 'Cases', icon: 'briefcase' },
     { id: 'integrity', label: 'Integrity', icon: 'fingerprint' },
+    ...(isAdmin ? [{ id: 'operations' as const, label: 'Operations', icon: 'activity' as const }] : []),
   ]
 
   return (
@@ -130,6 +133,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => Promise<voi
           {view === 'dashboard' && <DashboardPage user={user} refreshKey={refreshKey} onCreate={() => setCreateOpen(true)} onSelectCase={setSelectedCaseId} onViewCases={() => navigate('cases')} />}
           {view === 'cases' && <CasesPage refreshKey={refreshKey} onCreate={() => setCreateOpen(true)} onSelectCase={setSelectedCaseId} />}
           {view === 'integrity' && <IntegrityPage refreshKey={refreshKey} onSelectCase={setSelectedCaseId} />}
+          {isAdmin && view === 'operations' && <OperationsPage />}
         </main>
       </div>
 

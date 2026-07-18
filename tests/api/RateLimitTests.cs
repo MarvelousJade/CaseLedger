@@ -11,6 +11,7 @@ public sealed class RateLimitTests
     {
         using var factory = new CaseLedgerFactory();
         using var client = factory.CreateClient();
+        await client.RefreshAntiforgeryTokenAsync();
 
         for (var attempt = 0; attempt < 10; attempt++)
         {
