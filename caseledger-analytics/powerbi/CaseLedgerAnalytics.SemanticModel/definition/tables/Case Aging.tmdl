@@ -1,5 +1,4 @@
 table 'Case Aging'
-
 	lineageTag: e554e737-da62-4864-afd9-d6330a8c8d91
 
 	measure 'Average Case Age' = AVERAGE('Case Aging'[Age Days])
@@ -20,6 +19,8 @@ table 'Case Aging'
 		lineageTag: 959cf398-73b7-4497-b85e-cd0d105b00ab
 		summarizeBy: none
 		sourceColumn: snapshot_date
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column 'Case Reference'
 		dataType: string
@@ -67,8 +68,10 @@ table 'Case Aging'
 		dataType: int64
 		formatString: 0
 		lineageTag: a485b6cf-2f70-4d51-a10a-a792af258931
-		summarizeBy: average
+		summarizeBy: sum
 		sourceColumn: age_days
+
+		annotation SummarizationSetBy = Automatic
 
 	column 'Aging Bucket'
 		dataType: string
@@ -86,17 +89,41 @@ table 'Case Aging'
 		dataType: int64
 		formatString: 0
 		lineageTag: 4c12b0b4-8ad6-4a7c-97cf-a71c3dbcb425
-		summarizeBy: average
+		summarizeBy: sum
 		sourceColumn: first_response_minutes
+
+		annotation SummarizationSetBy = Automatic
+
+	column source_case_id
+		dataType: string
+		lineageTag: 161b265f-1f07-4968-894c-7ee5ba3996c0
+		summarizeBy: none
+		sourceColumn: source_case_id
+
+		annotation SummarizationSetBy = Automatic
+
+	column due_at
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: 1325b69f-e22c-4ac7-a17b-e2f4bde58ed4
+		summarizeBy: none
+		sourceColumn: due_at
+
+		variation Variation
+			isDefault
+			relationship: fcd95e4f-cedf-4204-9d89-612916bcc1f5
+			defaultHierarchy: LocalDateTable_9ed32a56-d6d8-4d62-b110-cd9d9e09f3fd.'Date Hierarchy'
+
+		annotation SummarizationSetBy = Automatic
 
 	partition 'Case Aging' = m
 		mode: import
 		queryGroup: 'Reporting Marts'
 		source =
-			let
-			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
-			    Mart = Source{[Schema="mart",Item="vw_CaseAging"]}[Data]
-			in
-			    Mart
+				let
+				    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+				    Mart = Source{[Schema="mart",Item="vw_CaseAging"]}[Data]
+				in
+				    Mart
 
 	annotation PBI_ResultType = Table

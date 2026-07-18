@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "Report",
+    "displayName": "CaseLedgerAnalytics"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "c3b122f2-4eea-4c23-8828-dc36f5b75e2b"
+  }
+}

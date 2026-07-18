@@ -1,5 +1,4 @@
 model Model
-
 	culture: en-US
 	defaultPowerBIDataSourceVersion: powerBI_V3
 	sourceQueryCulture: en-US
@@ -7,14 +6,28 @@ model Model
 		legacyRedirects
 		returnErrorValuesAsNull
 
-	queryGroup 'Reporting Marts'
+queryGroup 'Reporting Marts'
 
-	expression SqlServerHost = "clanalytics-dev-i6uwuodhrksjg.database.windows.net" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	annotation PBI_QueryGroupOrder = 0
 
-		annotation PBI_NavigationStepName = Navigation
+annotation PBI_QueryOrder = ["SqlServerHost","SqlServerDatabase","Date","Operations Daily","Case Aging","SLA Compliance","Integration Reliability","Data Quality","ETL Run History"]
 
-	expression SqlServerDatabase = "CaseLedgerAnalytics" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+annotation __PBI_TimeIntelligenceEnabled = 1
 
-		annotation PBI_NavigationStepName = Navigation
+annotation PBI_ProTooling = ["DevMode"]
 
-	annotation PBI_QueryOrder = ["SqlServerHost","SqlServerDatabase","Date","Operations Daily","Case Aging","SLA Compliance","Integration Reliability","Data Quality","ETL Run History"]
+ref table 'Case Aging'
+ref table 'Data Quality'
+ref table Date
+ref table 'ETL Run History'
+ref table 'Integration Reliability'
+ref table 'Operations Daily'
+ref table 'SLA Compliance'
+ref table DateTableTemplate_2f426562-4f0b-44cc-bdd8-a11dba1ec71a
+ref table LocalDateTable_406fbf00-a823-46cb-a2f6-61de4fed9521
+ref table LocalDateTable_59f992b1-6544-4de9-8db7-bba26c72d19e
+ref table LocalDateTable_2cdb026d-c119-40af-b68e-b0c0fa5c7ed3
+ref table LocalDateTable_c58fbab2-9caa-4287-aba4-8acdb0be8be0
+ref table LocalDateTable_ecdd2e13-9717-4233-b8a5-656eec2fdf0a
+ref table LocalDateTable_9ed32a56-d6d8-4d62-b110-cd9d9e09f3fd
+ref table LocalDateTable_1718e7a1-ab60-4f7f-85db-3151333c2b61

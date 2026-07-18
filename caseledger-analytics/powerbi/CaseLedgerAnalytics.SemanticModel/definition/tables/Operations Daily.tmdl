@@ -1,5 +1,4 @@
 table 'Operations Daily'
-
 	lineageTag: 231927f4-41bd-4022-8904-05df3df12c68
 
 	measure 'Cases Opened' = SUM('Operations Daily'[Cases Opened Value])
@@ -14,12 +13,24 @@ table 'Operations Daily'
 		formatString: #,0
 		lineageTag: ea4288ea-a28d-4eac-a587-5871b4b19b95
 
+	measure 'Current Backlog EOD' = ```
+			VAR LatestDate = MAX('Operations Daily'[Calendar Date])
+			RETURN
+			    CALCULATE(
+			        SUM('Operations Daily'[Backlog EOD Value]),
+			        'Operations Daily'[Calendar Date] = LatestDate
+			    )
+			```
+		formatString: #,0
+
 	column 'Calendar Date'
 		dataType: dateTime
 		formatString: yyyy-mm-dd
 		lineageTag: 94bb7508-ae10-49a0-8113-acfc36017d0c
 		summarizeBy: none
 		sourceColumn: calendar_date
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column Status
 		dataType: string
@@ -61,11 +72,13 @@ table 'Operations Daily'
 		sourceColumn: backlog_eod
 
 	column 'Average Case Age Days'
-		dataType: decimal
+		dataType: double
 		formatString: 0.0
 		lineageTag: 1abf9aaa-adb0-4c79-b236-f39536a5849c
-		summarizeBy: average
+		summarizeBy: sum
 		sourceColumn: average_case_age_days
+
+		annotation SummarizationSetBy = Automatic
 
 	column 'SLA Breach Count Value'
 		dataType: int64
@@ -74,14 +87,23 @@ table 'Operations Daily'
 		summarizeBy: sum
 		sourceColumn: sla_breach_count
 
+	column cases_at_eod
+		dataType: int64
+		formatString: 0
+		lineageTag: 690da97a-a035-4fe1-a444-b81379d1b741
+		summarizeBy: sum
+		sourceColumn: cases_at_eod
+
+		annotation SummarizationSetBy = Automatic
+
 	partition 'Operations Daily' = m
 		mode: import
 		queryGroup: 'Reporting Marts'
 		source =
-			let
-			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
-			    Mart = Source{[Schema="mart",Item="vw_OperationsDaily"]}[Data]
-			in
-			    Mart
+				let
+				    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+				    Mart = Source{[Schema="mart",Item="vw_OperationsDaily"]}[Data]
+				in
+				    Mart
 
 	annotation PBI_ResultType = Table

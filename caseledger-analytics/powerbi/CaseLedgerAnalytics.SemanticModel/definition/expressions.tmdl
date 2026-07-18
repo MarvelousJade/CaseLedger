@@ -1,0 +1,13 @@
+expression SqlServerHost = "clanalytics-dev-i6uwuodhrksjg.database.windows.net" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: 8ed4555e-eb3a-4b5d-b0ca-db24da38c83c
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Text
+
+expression SqlServerDatabase = "CaseLedgerAnalytics" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	lineageTag: b087c813-b65e-4e78-b168-adbf98e6334a
+
+	annotation PBI_NavigationStepName = Navigation
+
+	annotation PBI_ResultType = Text

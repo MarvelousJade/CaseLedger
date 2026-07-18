@@ -1,0 +1,113 @@
+{
+  "version": "1.1.0",
+  "diagrams": [
+    {
+      "ordinal": 0,
+      "scrollPosition": {
+        "x": 0,
+        "y": 0
+      },
+      "nodes": [
+        {
+          "location": {
+            "x": 625.80559297465413,
+            "y": 202.93967317495083
+          },
+          "nodeIndex": "Case Aging",
+          "nodeLineageTag": "e554e737-da62-4864-afd9-d6330a8c8d91",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 859.80559297465425,
+            "y": 343.06151244878436
+          },
+          "nodeIndex": "Data Quality",
+          "nodeLineageTag": "22259a54-f86d-4822-be84-8febc70c92f2",
+          "size": {
+            "height": 296,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 336.70860934902487,
+            "y": 327.42473553789171
+          },
+          "nodeIndex": "Date",
+          "nodeLineageTag": "10ca1602-4815-48e9-bfa9-8e4e853dadbe",
+          "size": {
+            "height": 224,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 1143.8055929746542,
+            "y": 341.06151244878436
+          },
+          "nodeIndex": "ETL Run History",
+          "nodeLineageTag": "b683cb4c-cda3-4dfc-ab00-53660a921683",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 322.99749824588923,
+            "y": -50
+          },
+          "nodeIndex": "Integration Reliability",
+          "nodeLineageTag": "f448480e-d552-412f-9b59-bfd81de08149",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 50,
+            "y": 307.28481358384505
+          },
+          "nodeIndex": "Operations Daily",
+          "nodeLineageTag": "231927f4-41bd-4022-8904-05df3df12c68",
+          "size": {
+            "height": 300,
+            "width": 234
+          },
+          "zIndex": 0
+        },
+        {
+          "location": {
+            "x": 320.06446886652793,
+            "y": 660.12302489756871
+          },
+          "nodeIndex": "SLA Compliance",
+          "nodeLineageTag": "00c13ff6-447a-4849-99d8-a24f76e52ee9",
+          "size": {
+            "height": 272,
+            "width": 234
+          },
+          "zIndex": 0
+        }
+      ],
+      "name": "All tables",
+      "zoomValue": 100,
+      "pinKeyFieldsToTop": false,
+      "showExtraHeaderInfo": false,
+      "hideKeyFieldsWhenCollapsed": false,
+      "tablesLocked": false
+    }
+  ],
+  "selectedDiagram": "All tables",
+  "defaultDiagram": "All tables"
+}

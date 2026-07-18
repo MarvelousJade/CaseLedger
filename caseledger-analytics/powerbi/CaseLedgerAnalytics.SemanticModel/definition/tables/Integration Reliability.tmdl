@@ -1,5 +1,4 @@
 table 'Integration Reliability'
-
 	lineageTag: f448480e-d552-412f-9b59-bfd81de08149
 
 	measure 'Delivery Success Percentage' = DIVIDE(SUM('Integration Reliability'[Successful Deliveries]), SUM('Integration Reliability'[Delivery Count]))
@@ -24,6 +23,8 @@ table 'Integration Reliability'
 		lineageTag: 475c1238-6694-448c-b76a-97ebd49c2d3a
 		summarizeBy: none
 		sourceColumn: calendar_date
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column Channel
 		dataType: string
@@ -66,27 +67,51 @@ table 'Integration Reliability'
 		sourceColumn: dead_letter_count
 
 	column 'Average Processing Time Ms'
-		dataType: decimal
+		dataType: double
 		formatString: #,0
 		lineageTag: 499b58eb-4167-4ae7-870c-f5127fabec5f
-		summarizeBy: average
+		summarizeBy: sum
 		sourceColumn: average_processing_time_ms
 
+		annotation SummarizationSetBy = Automatic
+
 	column 'P95 Processing Time Ms'
-		dataType: decimal
+		dataType: double
 		formatString: #,0
 		lineageTag: b2434b25-f717-4257-8955-b9271bf5ca61
-		summarizeBy: max
+		summarizeBy: sum
 		sourceColumn: p95_processing_time_ms
+
+		annotation SummarizationSetBy = Automatic
+
+	column delivery_success_percentage
+		dataType: double
+		lineageTag: 3ed800bb-e7db-4607-b060-10d78adf0a1e
+		summarizeBy: sum
+		sourceColumn: delivery_success_percentage
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
+	column retry_percentage
+		dataType: double
+		lineageTag: 72943442-fdd3-425f-9a54-4d2a5b68f69e
+		summarizeBy: sum
+		sourceColumn: retry_percentage
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
 
 	partition 'Integration Reliability' = m
 		mode: import
 		queryGroup: 'Reporting Marts'
 		source =
-			let
-			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
-			    Mart = Source{[Schema="mart",Item="vw_IntegrationReliability"]}[Data]
-			in
-			    Mart
+				let
+				    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+				    Mart = Source{[Schema="mart",Item="vw_IntegrationReliability"]}[Data]
+				in
+				    Mart
 
 	annotation PBI_ResultType = Table

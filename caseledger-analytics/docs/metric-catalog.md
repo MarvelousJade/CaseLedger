@@ -9,6 +9,7 @@ returns blank rather than zero.
 | Cases Opened | Count of `CaseCreated` events | Event date; date/category/priority/status | `vw_OperationsDaily` |
 | Cases Closed | Count of events whose governed new status is `Resolved` | Event date; date/category/priority/status | `vw_OperationsDaily` |
 | Backlog EOD | Sum of open case/day snapshots at day end | Case/day; date/category/priority/status | `vw_OperationsDaily` |
+| Current Backlog EOD | Backlog EOD on the latest calendar date in the selected context | Latest selected date; category/priority/status | Semantic measure over `vw_OperationsDaily` |
 | Average Case Age | Arithmetic mean of current `age_days` | Current case; category/priority/status/team/tier | `vw_CaseAging` |
 | Median Case Age | Median of current `age_days` | Current case; category/priority/status/team/tier | Semantic measure over `vw_CaseAging` |
 | SLA Compliance Percentage | Compliant cases / evaluated cases | Current case; tier/category | `vw_SLACompliance` |

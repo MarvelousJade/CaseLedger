@@ -13,3 +13,38 @@ relationship 2f725b57-b4ec-4619-9661-7364ee44ef25
 relationship b82db47e-cad1-490b-b69e-56925f2e6333
 	fromColumn: 'Integration Reliability'.'Calendar Date'
 	toColumn: Date.Date
+
+relationship 648b82b6-6f9e-4d8d-a2b8-ea842fffca89
+	joinOnDateBehavior: datePartOnly
+	fromColumn: 'Data Quality'.'Executed At'
+	toColumn: LocalDateTable_406fbf00-a823-46cb-a2f6-61de4fed9521.Date
+
+relationship 77303950-c998-4b6c-b54c-88193600f0e6
+	joinOnDateBehavior: datePartOnly
+	fromColumn: Date.Date
+	toColumn: LocalDateTable_59f992b1-6544-4de9-8db7-bba26c72d19e.Date
+
+relationship f128f977-f500-497a-88bd-7502b554203b
+	joinOnDateBehavior: datePartOnly
+	fromColumn: 'ETL Run History'.'Started At'
+	toColumn: LocalDateTable_2cdb026d-c119-40af-b68e-b0c0fa5c7ed3.Date
+
+relationship d7a5e1dd-8229-4bb0-9a4a-22e3187ca3da
+	joinOnDateBehavior: datePartOnly
+	fromColumn: 'ETL Run History'.'Completed At'
+	toColumn: LocalDateTable_c58fbab2-9caa-4287-aba4-8acdb0be8be0.Date
+
+relationship 4fcca83e-a07c-4e1f-aa54-c6c555017cd5
+	joinOnDateBehavior: datePartOnly
+	fromColumn: 'ETL Run History'.'High Watermark'
+	toColumn: LocalDateTable_ecdd2e13-9717-4233-b8a5-656eec2fdf0a.Date
+
+relationship fcd95e4f-cedf-4204-9d89-612916bcc1f5
+	joinOnDateBehavior: datePartOnly
+	fromColumn: 'Case Aging'.due_at
+	toColumn: LocalDateTable_9ed32a56-d6d8-4d62-b110-cd9d9e09f3fd.Date
+
+relationship 8cc4a6fa-50a7-4042-81f2-9e26a575bf92
+	joinOnDateBehavior: datePartOnly
+	fromColumn: 'ETL Run History'.previous_watermark
+	toColumn: LocalDateTable_1718e7a1-ab60-4f7f-85db-3151333c2b61.Date

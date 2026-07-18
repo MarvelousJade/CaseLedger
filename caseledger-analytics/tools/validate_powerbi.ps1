@@ -49,7 +49,7 @@ $assemblyNames = @(
     'Microsoft.PowerBI.Amo.Core.dll'
     'Microsoft.PowerBI.Amo.dll'
 )
-$assemblyCache = Join-Path ([IO.Path]::GetTempPath()) 'caseledger-powerbi-validator'
+$assemblyCache = Join-Path ([IO.Path]::GetTempPath()) "caseledger-powerbi-validator\$PID"
 [IO.Directory]::CreateDirectory($assemblyCache) | Out-Null
 
 foreach ($name in $assemblyNames) {

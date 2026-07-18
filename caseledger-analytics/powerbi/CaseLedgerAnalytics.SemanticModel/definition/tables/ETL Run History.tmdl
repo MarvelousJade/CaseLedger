@@ -1,5 +1,4 @@
 table 'ETL Run History'
-
 	lineageTag: b683cb4c-cda3-4dfc-ab00-53660a921683
 
 	measure 'ETL Success Percentage' = DIVIDE(CALCULATE(COUNTROWS('ETL Run History'), 'ETL Run History'[Status] = "Succeeded"), COUNTROWS('ETL Run History'))
@@ -33,6 +32,11 @@ table 'ETL Run History'
 		summarizeBy: none
 		sourceColumn: started_at
 
+		variation Variation
+			isDefault
+			relationship: f128f977-f500-497a-88bd-7502b554203b
+			defaultHierarchy: LocalDateTable_2cdb026d-c119-40af-b68e-b0c0fa5c7ed3.'Date Hierarchy'
+
 	column 'Completed At'
 		dataType: dateTime
 		formatString: yyyy-mm-dd hh:mm:ss
@@ -40,12 +44,22 @@ table 'ETL Run History'
 		summarizeBy: none
 		sourceColumn: completed_at
 
+		variation Variation
+			isDefault
+			relationship: d7a5e1dd-8229-4bb0-9a4a-22e3187ca3da
+			defaultHierarchy: LocalDateTable_c58fbab2-9caa-4287-aba4-8acdb0be8be0.'Date Hierarchy'
+
 	column 'High Watermark'
 		dataType: dateTime
 		formatString: yyyy-mm-dd hh:mm:ss
 		lineageTag: a9037a27-001a-42fb-95fc-c797d22e33ce
 		summarizeBy: none
 		sourceColumn: high_watermark
+
+		variation Variation
+			isDefault
+			relationship: 4fcca83e-a07c-4e1f-aa54-c6c555017cd5
+			defaultHierarchy: LocalDateTable_ecdd2e13-9717-4233-b8a5-656eec2fdf0a.'Date Hierarchy'
 
 	column 'Rows Extracted'
 		dataType: int64
@@ -65,8 +79,10 @@ table 'ETL Run History'
 		dataType: int64
 		formatString: #,0
 		lineageTag: b7ae2067-9c2f-4cba-9b92-a80724262ba8
-		summarizeBy: average
+		summarizeBy: sum
 		sourceColumn: duration_ms
+
+		annotation SummarizationSetBy = Automatic
 
 	column Status
 		dataType: string
@@ -88,14 +104,54 @@ table 'ETL Run History'
 		summarizeBy: sum
 		sourceColumn: failed_checks
 
+	column previous_watermark
+		dataType: dateTime
+		formatString: General Date
+		lineageTag: caf93fd0-65f3-4191-8cd7-4bb666635340
+		summarizeBy: none
+		sourceColumn: previous_watermark
+
+		variation Variation
+			isDefault
+			relationship: 8cc4a6fa-50a7-4042-81f2-9e26a575bf92
+			defaultHierarchy: LocalDateTable_1718e7a1-ab60-4f7f-85db-3151333c2b61.'Date Hierarchy'
+
+		annotation SummarizationSetBy = Automatic
+
+	column rows_staged
+		dataType: int64
+		formatString: 0
+		lineageTag: 9f58422e-5e90-49fd-99e2-b594410a2cc5
+		summarizeBy: sum
+		sourceColumn: rows_staged
+
+		annotation SummarizationSetBy = Automatic
+
+	column rows_rejected
+		dataType: int64
+		formatString: 0
+		lineageTag: 1de20d83-cce3-4f63-8542-24517a177fd1
+		summarizeBy: sum
+		sourceColumn: rows_rejected
+
+		annotation SummarizationSetBy = Automatic
+
+	column error_message
+		dataType: string
+		lineageTag: 2cf12c11-1906-48de-987d-43ab1f84b2aa
+		summarizeBy: none
+		sourceColumn: error_message
+
+		annotation SummarizationSetBy = Automatic
+
 	partition 'ETL Run History' = m
 		mode: import
 		queryGroup: 'Reporting Marts'
 		source =
-			let
-			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
-			    Mart = Source{[Schema="mart",Item="vw_ETLRunHistory"]}[Data]
-			in
-			    Mart
+				let
+				    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+				    Mart = Source{[Schema="mart",Item="vw_ETLRunHistory"]}[Data]
+				in
+				    Mart
 
 	annotation PBI_ResultType = Table

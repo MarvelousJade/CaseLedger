@@ -1,5 +1,4 @@
 table 'SLA Compliance'
-
 	lineageTag: 00c13ff6-447a-4849-99d8-a24f76e52ee9
 
 	measure 'SLA Compliance Percentage' = DIVIDE(SUM('SLA Compliance'[Compliant Cases]), SUM('SLA Compliance'[Evaluated Cases]))
@@ -16,6 +15,8 @@ table 'SLA Compliance'
 		lineageTag: 08cac43b-a761-40aa-a2b2-c0275567999d
 		summarizeBy: none
 		sourceColumn: snapshot_date
+
+		annotation UnderlyingDateTimeDataType = Date
 
 	column 'Service Tier'
 		dataType: string
@@ -50,14 +51,24 @@ table 'SLA Compliance'
 		summarizeBy: sum
 		sourceColumn: breached_cases
 
+	column sla_compliance_percentage
+		dataType: double
+		lineageTag: 25a6aa62-c2c4-429f-9ff6-f84c607aa932
+		summarizeBy: sum
+		sourceColumn: sla_compliance_percentage
+
+		annotation SummarizationSetBy = Automatic
+
+		annotation PBI_FormatHint = {"isGeneralNumber":true}
+
 	partition 'SLA Compliance' = m
 		mode: import
 		queryGroup: 'Reporting Marts'
 		source =
-			let
-			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
-			    Mart = Source{[Schema="mart",Item="vw_SLACompliance"]}[Data]
-			in
-			    Mart
+				let
+				    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+				    Mart = Source{[Schema="mart",Item="vw_SLACompliance"]}[Data]
+				in
+				    Mart
 
 	annotation PBI_ResultType = Table

@@ -1,0 +1,11 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/gitIntegration/platformProperties/2.0.0/schema.json",
+  "metadata": {
+    "type": "SemanticModel",
+    "displayName": "CaseLedgerAnalytics"
+  },
+  "config": {
+    "version": "2.0",
+    "logicalId": "addbd4d1-3778-485e-9a9f-42fb44baae49"
+  }
+}

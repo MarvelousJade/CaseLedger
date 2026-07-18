@@ -1,8 +1,7 @@
 table 'Data Quality'
-
 	lineageTag: 22259a54-f86d-4822-be84-8febc70c92f2
 
-	measure 'Failed Quality Checks' = CALCULATE(COUNTROWS('Data Quality'), 'Data Quality'[Passed] = FALSE())
+	measure 'Failed Quality Checks' = COALESCE(CALCULATE(COUNTROWS('Data Quality'), 'Data Quality'[Passed] = FALSE()), 0)
 		formatString: #,0
 		lineageTag: 36287439-028b-4d4f-9493-c9aedf49dbbc
 
@@ -55,14 +54,19 @@ table 'Data Quality'
 		summarizeBy: none
 		sourceColumn: executed_at
 
+		variation Variation
+			isDefault
+			relationship: 648b82b6-6f9e-4d8d-a2b8-ea842fffca89
+			defaultHierarchy: LocalDateTable_406fbf00-a823-46cb-a2f6-61de4fed9521.'Date Hierarchy'
+
 	partition 'Data Quality' = m
 		mode: import
 		queryGroup: 'Reporting Marts'
 		source =
-			let
-			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
-			    Mart = Source{[Schema="mart",Item="vw_DataQuality"]}[Data]
-			in
-			    Mart
+				let
+				    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+				    Mart = Source{[Schema="mart",Item="vw_DataQuality"]}[Data]
+				in
+				    Mart
 
 	annotation PBI_ResultType = Table

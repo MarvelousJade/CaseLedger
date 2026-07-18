@@ -1,5 +1,4 @@
 table Date
-
 	lineageTag: 10ca1602-4815-48e9-bfa9-8e4e853dadbe
 
 	column Date
@@ -9,26 +8,39 @@ table Date
 		summarizeBy: none
 		sourceColumn: calendar_date
 
+		variation Variation
+			isDefault
+			relationship: 77303950-c998-4b6c-b54c-88193600f0e6
+			defaultHierarchy: LocalDateTable_59f992b1-6544-4de9-8db7-bba26c72d19e.'Date Hierarchy'
+
+		annotation UnderlyingDateTimeDataType = Date
+
 	column Year
 		dataType: int64
 		formatString: 0
 		lineageTag: 547285d5-5820-4318-9cf4-56c111b603a7
-		summarizeBy: none
+		summarizeBy: sum
 		sourceColumn: calendar_year
+
+		annotation SummarizationSetBy = Automatic
 
 	column Quarter
 		dataType: int64
 		formatString: 0
 		lineageTag: 85e545f3-1be3-4934-a1ec-a7d8e66e6cf9
-		summarizeBy: none
+		summarizeBy: sum
 		sourceColumn: calendar_quarter
+
+		annotation SummarizationSetBy = Automatic
 
 	column 'Month Number'
 		dataType: int64
 		formatString: 0
 		lineageTag: f50b34a4-3486-4bc6-ad23-fc87152e029e
-		summarizeBy: none
+		summarizeBy: sum
 		sourceColumn: month_number
+
+		annotation SummarizationSetBy = Automatic
 
 	column Month
 		dataType: string
@@ -41,17 +53,54 @@ table Date
 		dataType: int64
 		formatString: 0
 		lineageTag: 41400d72-e448-4527-91fb-6f8225226245
-		summarizeBy: none
+		summarizeBy: sum
 		sourceColumn: week_of_year
+
+		annotation SummarizationSetBy = Automatic
+
+	column date_key
+		dataType: int64
+		formatString: 0
+		lineageTag: 12c42fd5-608f-48a9-ab6b-0ef9b9fbec9d
+		summarizeBy: sum
+		sourceColumn: date_key
+
+		annotation SummarizationSetBy = Automatic
+
+	column day_of_month
+		dataType: int64
+		formatString: 0
+		lineageTag: 4c7d931c-f147-4827-a522-d9090283fff2
+		summarizeBy: sum
+		sourceColumn: day_of_month
+
+		annotation SummarizationSetBy = Automatic
+
+	column day_name
+		dataType: string
+		lineageTag: 93dd6452-2854-48d6-8009-ef735df6f0cd
+		summarizeBy: none
+		sourceColumn: day_name
+
+		annotation SummarizationSetBy = Automatic
+
+	column is_weekend
+		dataType: boolean
+		formatString: """TRUE"";""TRUE"";""FALSE"""
+		lineageTag: d412d7a4-e6f1-467e-8b84-660f29a8c8cd
+		summarizeBy: none
+		sourceColumn: is_weekend
+
+		annotation SummarizationSetBy = Automatic
 
 	partition Date = m
 		mode: import
 		queryGroup: 'Reporting Marts'
 		source =
-			let
-			    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
-			    Mart = Source{[Schema="mart",Item="vw_Date"]}[Data]
-			in
-			    Mart
+				let
+				    Source = Sql.Database(SqlServerHost, SqlServerDatabase),
+				    Mart = Source{[Schema="mart",Item="vw_Date"]}[Data]
+				in
+				    Mart
 
 	annotation PBI_ResultType = Table
