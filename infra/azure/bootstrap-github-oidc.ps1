@@ -19,6 +19,9 @@ param(
     [string] $GitHubRepository = 'CaseLedger',
 
     [Parameter()]
+    [string] $GitHubOidcSubjectPrefix,
+
+    [Parameter()]
     [ValidateSet('azure-production', 'azure-staging', 'azure-dev')]
     [string] $GitHubEnvironment = 'azure-production'
 )
@@ -55,6 +58,31 @@ if ([string]::IsNullOrWhiteSpace($IdentityName)) {
 
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     throw 'Azure CLI is required. Reopen PowerShell after installing it.'
+}
+
+if ([string]::IsNullOrWhiteSpace($GitHubOidcSubjectPrefix)) {
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        throw 'GitHub CLI is required to resolve the repository OIDC subject. Install gh, run gh auth login, then retry.'
+    }
+
+    $oidcSettingsJson = & gh api `
+        "repos/$GitHubOwner/$GitHubRepository/actions/oidc/customization/sub" `
+        2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw 'The GitHub OIDC subject could not be read. Confirm gh is signed in with repository administration access.'
+    }
+
+    $oidcSettings = $oidcSettingsJson | ConvertFrom-Json
+    $GitHubOidcSubjectPrefix = $oidcSettings.sub_claim_prefix
+}
+
+$nameOnlySubjectPrefix = "repo:${GitHubOwner}/${GitHubRepository}"
+$immutableSubjectPattern = '^repo:' +
+    [regex]::Escape($GitHubOwner) + '@\d+/' +
+    [regex]::Escape($GitHubRepository) + '@\d+$'
+if ($GitHubOidcSubjectPrefix -ne $nameOnlySubjectPrefix -and
+    $GitHubOidcSubjectPrefix -notmatch $immutableSubjectPattern) {
+    throw "GitHub returned an unexpected OIDC subject prefix for $GitHubOwner/$GitHubRepository. Refusing to broaden Azure trust."
 }
 
 $account = & az account show --output json 2>$null
@@ -121,7 +149,7 @@ foreach ($role in @('Contributor', 'Role Based Access Control Administrator')) {
 }
 
 $credentialName = "github-$GitHubEnvironment"
-$subject = "repo:${GitHubOwner}/${GitHubRepository}:environment:${GitHubEnvironment}"
+$subject = "${GitHubOidcSubjectPrefix}:environment:${GitHubEnvironment}"
 $credentialJson = & az identity federated-credential show `
     --resource-group $ResourceGroup `
     --identity-name $IdentityName `
