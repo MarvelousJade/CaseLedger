@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "333543144ac179b05c89",
   "position": {
     "x": 928,
@@ -27,7 +27,8 @@
                 }
               },
               "queryRef": "Case Aging.Service Tier",
-              "nativeQueryRef": "Service Tier"
+              "nativeQueryRef": "Service Tier",
+              "active": true
             }
           ]
         }

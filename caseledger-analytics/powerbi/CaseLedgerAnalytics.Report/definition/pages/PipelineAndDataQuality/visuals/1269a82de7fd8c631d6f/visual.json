@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "1269a82de7fd8c631d6f",
   "position": {
     "x": 1104,
@@ -27,7 +27,8 @@
                 }
               },
               "queryRef": "Data Quality.Passed",
-              "nativeQueryRef": "Passed"
+              "nativeQueryRef": "Passed",
+              "active": true
             }
           ]
         }

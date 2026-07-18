@@ -155,3 +155,4 @@ table 'ETL Run History'
 				    Mart
 
 	annotation PBI_ResultType = Table
+

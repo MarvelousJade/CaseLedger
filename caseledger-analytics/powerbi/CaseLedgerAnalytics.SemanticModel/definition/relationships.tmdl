@@ -48,3 +48,4 @@ relationship 8cc4a6fa-50a7-4042-81f2-9e26a575bf92
 	joinOnDateBehavior: datePartOnly
 	fromColumn: 'ETL Run History'.previous_watermark
 	toColumn: LocalDateTable_1718e7a1-ab60-4f7f-85db-3151333c2b61.Date
+

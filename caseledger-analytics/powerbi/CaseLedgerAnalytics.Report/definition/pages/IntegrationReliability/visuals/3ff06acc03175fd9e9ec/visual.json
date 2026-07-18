@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "3ff06acc03175fd9e9ec",
   "position": {
     "x": 1096,
@@ -27,7 +27,8 @@
                 }
               },
               "queryRef": "Integration Reliability.Failure Reason",
-              "nativeQueryRef": "Failure Reason"
+              "nativeQueryRef": "Failure Reason",
+              "active": true
             }
           ]
         }

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "9b62528ce9fa6ffbfd4a",
   "position": {
     "x": 720,
@@ -27,7 +27,8 @@
                 }
               },
               "queryRef": "ETL Run History.Pipeline Name",
-              "nativeQueryRef": "Pipeline Name"
+              "nativeQueryRef": "Pipeline Name",
+              "active": true
             }
           ]
         }

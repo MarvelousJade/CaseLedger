@@ -113,3 +113,4 @@ table LocalDateTable_9ed32a56-d6d8-4d62-b110-cd9d9e09f3fd
 		source = Calendar(Date(Year(MIN('Case Aging'[due_at])), 1, 1), Date(Year(MAX('Case Aging'[due_at])), 12, 31))
 
 	annotation __PBI_LocalDateTable = true
+

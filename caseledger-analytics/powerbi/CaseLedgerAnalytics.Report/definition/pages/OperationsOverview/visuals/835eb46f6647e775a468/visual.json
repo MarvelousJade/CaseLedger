@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "835eb46f6647e775a468",
   "position": {
     "x": 820,
@@ -27,7 +27,8 @@
                 }
               },
               "queryRef": "Operations Daily.Status",
-              "nativeQueryRef": "Status"
+              "nativeQueryRef": "Status",
+              "active": true
             }
           ]
         },
@@ -65,8 +66,7 @@
             },
             "direction": "Descending"
           }
-        ],
-        "isDefaultSort": false
+        ]
       }
     },
     "objects": {

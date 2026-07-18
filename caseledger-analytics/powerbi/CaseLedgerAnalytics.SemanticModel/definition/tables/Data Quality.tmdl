@@ -70,3 +70,4 @@ table 'Data Quality'
 				    Mart
 
 	annotation PBI_ResultType = Table
+

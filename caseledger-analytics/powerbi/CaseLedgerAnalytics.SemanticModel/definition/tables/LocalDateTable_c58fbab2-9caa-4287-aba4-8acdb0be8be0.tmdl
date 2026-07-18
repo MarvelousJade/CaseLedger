@@ -113,3 +113,4 @@ table LocalDateTable_c58fbab2-9caa-4287-aba4-8acdb0be8be0
 		source = Calendar(Date(Year(MIN('ETL Run History'[Completed At])), 1, 1), Date(Year(MAX('ETL Run History'[Completed At])), 12, 31))
 
 	annotation __PBI_LocalDateTable = true
+

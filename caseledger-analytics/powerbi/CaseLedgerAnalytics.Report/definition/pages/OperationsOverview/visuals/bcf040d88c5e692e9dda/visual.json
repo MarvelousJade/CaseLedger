@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "bcf040d88c5e692e9dda",
   "position": {
     "x": 1096,
@@ -27,7 +27,8 @@
                 }
               },
               "queryRef": "Operations Daily.Status",
-              "nativeQueryRef": "Status"
+              "nativeQueryRef": "Status",
+              "active": true
             }
           ]
         }

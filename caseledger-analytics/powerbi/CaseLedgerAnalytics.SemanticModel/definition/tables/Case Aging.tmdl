@@ -127,3 +127,4 @@ table 'Case Aging'
 				    Mart
 
 	annotation PBI_ResultType = Table
+

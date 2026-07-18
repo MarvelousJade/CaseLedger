@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "cfd2be009d33a1f28445",
   "position": {
     "x": 650,
@@ -27,30 +27,8 @@
                 }
               },
               "queryRef": "Case Aging.Aging Bucket",
-              "nativeQueryRef": "Aging Bucket"
-            }
-          ]
-        },
-        "Y": {
-          "projections": [
-            {
-              "field": {
-                "Aggregation": {
-                  "Expression": {
-                    "Column": {
-                      "Expression": {
-                        "SourceRef": {
-                          "Entity": "Case Aging"
-                        }
-                      },
-                      "Property": "Case Reference"
-                    }
-                  },
-                  "Function": 5
-                }
-              },
-              "queryRef": "CountNonNull(Case Aging.Case Reference)",
-              "nativeQueryRef": "Count of Case Reference"
+              "nativeQueryRef": "Aging Bucket",
+              "active": true
             }
           ]
         },
@@ -76,6 +54,29 @@
               "nativeQueryRef": "Average of Age Days"
             }
           ]
+        },
+        "Y": {
+          "projections": [
+            {
+              "field": {
+                "Aggregation": {
+                  "Expression": {
+                    "Column": {
+                      "Expression": {
+                        "SourceRef": {
+                          "Entity": "Case Aging"
+                        }
+                      },
+                      "Property": "Case Reference"
+                    }
+                  },
+                  "Function": 5
+                }
+              },
+              "queryRef": "CountNonNull(Case Aging.Case Reference)",
+              "nativeQueryRef": "Count of Case Reference"
+            }
+          ]
         }
       },
       "sortDefinition": {
@@ -98,8 +99,7 @@
             },
             "direction": "Ascending"
           }
-        ],
-        "isDefaultSort": false
+        ]
       }
     },
     "objects": {

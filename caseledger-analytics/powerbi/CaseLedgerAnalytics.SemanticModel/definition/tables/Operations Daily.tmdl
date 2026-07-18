@@ -13,14 +13,13 @@ table 'Operations Daily'
 		formatString: #,0
 		lineageTag: ea4288ea-a28d-4eac-a587-5871b4b19b95
 
-	measure 'Current Backlog EOD' = ```
+	measure 'Current Backlog EOD' =
 			VAR LatestDate = MAX('Operations Daily'[Calendar Date])
 			RETURN
 			    CALCULATE(
 			        SUM('Operations Daily'[Backlog EOD Value]),
 			        'Operations Daily'[Calendar Date] = LatestDate
 			    )
-			```
 		formatString: #,0
 
 	column 'Calendar Date'
@@ -107,3 +106,4 @@ table 'Operations Daily'
 				    Mart
 
 	annotation PBI_ResultType = Table
+

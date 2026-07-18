@@ -1,5 +1,5 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.9.0/schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/2.10.0/schema.json",
   "name": "b438eec29418539ea594",
   "position": {
     "x": 650,
@@ -27,7 +27,26 @@
                 }
               },
               "queryRef": "Data Quality.Check",
-              "nativeQueryRef": "Check"
+              "nativeQueryRef": "Check",
+              "active": true
+            }
+          ]
+        },
+        "Series": {
+          "projections": [
+            {
+              "field": {
+                "Column": {
+                  "Expression": {
+                    "SourceRef": {
+                      "Entity": "Data Quality"
+                    }
+                  },
+                  "Property": "Passed"
+                }
+              },
+              "queryRef": "Data Quality.Passed",
+              "nativeQueryRef": "Passed"
             }
           ]
         },
@@ -53,24 +72,6 @@
               "nativeQueryRef": "Count of Batch ID"
             }
           ]
-        },
-        "Series": {
-          "projections": [
-            {
-              "field": {
-                "Column": {
-                  "Expression": {
-                    "SourceRef": {
-                      "Entity": "Data Quality"
-                    }
-                  },
-                  "Property": "Passed"
-                }
-              },
-              "queryRef": "Data Quality.Passed",
-              "nativeQueryRef": "Passed"
-            }
-          ]
         }
       },
       "sortDefinition": {
@@ -93,8 +94,7 @@
             },
             "direction": "Descending"
           }
-        ],
-        "isDefaultSort": false
+        ]
       }
     },
     "objects": {

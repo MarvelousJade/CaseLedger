@@ -115,3 +115,4 @@ table 'Integration Reliability'
 				    Mart
 
 	annotation PBI_ResultType = Table
+
