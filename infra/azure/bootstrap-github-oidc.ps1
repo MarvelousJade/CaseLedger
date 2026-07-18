@@ -66,6 +66,7 @@ if ([string]::IsNullOrWhiteSpace($GitHubOidcSubjectPrefix)) {
     }
 
     $oidcSettingsJson = & gh api `
+        -H 'X-GitHub-Api-Version: 2026-03-10' `
         "repos/$GitHubOwner/$GitHubRepository/actions/oidc/customization/sub" `
         2>$null
     if ($LASTEXITCODE -ne 0) {
@@ -74,6 +75,9 @@ if ([string]::IsNullOrWhiteSpace($GitHubOidcSubjectPrefix)) {
 
     $oidcSettings = $oidcSettingsJson | ConvertFrom-Json
     $GitHubOidcSubjectPrefix = $oidcSettings.sub_claim_prefix
+    if ([string]::IsNullOrWhiteSpace($GitHubOidcSubjectPrefix)) {
+        throw 'GitHub did not return the repository OIDC subject prefix. Preview it in the repository OIDC settings and pass the exact value with -GitHubOidcSubjectPrefix.'
+    }
 }
 
 $nameOnlySubjectPrefix = "repo:${GitHubOwner}/${GitHubRepository}"

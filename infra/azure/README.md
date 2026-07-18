@@ -174,6 +174,10 @@ gh auth login
 ./infra/azure/bootstrap-github-oidc.ps1 -GitHubEnvironment azure-staging
 ```
 
+If a GitHub Enterprise/API version does not return the subject prefix, preview the exact repository
+OIDC subject in GitHub settings and pass it with `-GitHubOidcSubjectPrefix`; the script still validates
+that the prefix names the requested repository before it changes Azure trust.
+
 Store the bootstrap resource group as the `AZURE_RESOURCE_GROUP` variable in that GitHub
 environment; the workflow intentionally takes it from the protected environment instead of a
 free-form dispatch input. Store the emitted identity values there as `AZURE_CLIENT_ID`,
