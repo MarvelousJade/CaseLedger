@@ -24,6 +24,18 @@ the parser installed by Power BI Desktop:
 .\tools\validate_powerbi.ps1
 ```
 
+After publishing to **My workspace**, configure the Azure SQL cloud connection
+and run a verified on-demand refresh from the repository root:
+
+```powershell
+.\caseledger-analytics\tools\configure_powerbi_service.ps1
+```
+
+The script reads `caseledger-powerbi-sql-connection` directly from Azure Key
+Vault, prompts for the organizational Power BI account, keeps credentials only
+in process memory, updates the cloud data source through the Power BI REST API,
+and restores the original Azure CLI subscription before exiting.
+
 This repository deliberately does not claim that Power BI Desktop was run in
 CI. The machine-readable semantic model, DAX, page definitions, screenshot
 previews, and PDF export are independently versioned and reviewable.
