@@ -163,13 +163,20 @@ Use separate protected GitHub environments so a staging dispatch cannot read pro
 | `dev` | `azure-dev` | `caseledger-dev` | `caseledger-github-dev-deploy` |
 | `prod` | `azure-production` | `caseledger-prod` | `caseledger-github-deploy` |
 
-Run the bootstrap only after signing in to the intended subscription and reviewing costs. Selecting
-the GitHub environment also selects safe resource-group and identity defaults; explicit overrides
-remain available:
+Run the bootstrap only after signing in to the intended Azure subscription and GitHub CLI, and after
+reviewing costs. The script reads GitHub's authoritative OIDC subject prefix so both classic and
+immutable repository-ID subjects are configured exactly; it refuses unexpected prefixes rather than
+broadening Azure trust. Selecting the GitHub environment also selects safe resource-group and
+identity defaults; explicit overrides remain available:
 
 ```powershell
+gh auth login
 ./infra/azure/bootstrap-github-oidc.ps1 -GitHubEnvironment azure-staging
 ```
+
+If a GitHub Enterprise/API version does not return the subject prefix, preview the exact repository
+OIDC subject in GitHub settings and pass it with `-GitHubOidcSubjectPrefix`; the script still validates
+that the prefix names the requested repository before it changes Azure trust.
 
 Store the bootstrap resource group as the `AZURE_RESOURCE_GROUP` variable in that GitHub
 environment; the workflow intentionally takes it from the protected environment instead of a

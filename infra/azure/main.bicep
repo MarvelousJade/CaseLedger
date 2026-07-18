@@ -171,7 +171,9 @@ var entraAuthenticationEnabled = authenticationMode == 'Entra' || authentication
 var storageAccountName = take('st${compactBaseName}', 24)
 var keyVaultName = take('kv-${baseName}', 24)
 var postgresServerName = '${baseName}-pg'
-var serviceBusNamespaceName = '${baseName}-sb'
+// Azure reserves namespace names ending in "-sb". Keep the purpose visible without using
+// a provider-reserved suffix.
+var serviceBusNamespaceName = '${baseName}-msg'
 var apiContainerAppName = '${baseName}-api'
 var workerContainerAppName = '${baseName}-worker'
 var effectiveMaximumAuditMessageBytes = serviceBusSkuName == 'Standard'
