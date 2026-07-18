@@ -108,10 +108,15 @@ builder.Services.AddScoped<DatabaseSeeder>();
 var messagingOptions = builder.Configuration
     .GetSection(MessagingOptions.SectionName)
     .Get<MessagingOptions>() ?? new MessagingOptions();
-if (messagingOptions.Enabled &&
-    !builder.Environment.IsEnvironment("Testing"))
+var messagingRuntimeEnabled = messagingOptions.Enabled &&
+    !builder.Environment.IsEnvironment("Testing");
+var messagingProvider = messagingRuntimeEnabled
+    ? MessagingRuntimeOptions.Validate(messagingOptions)
+    : (MessagingProviderKind?) null;
+builder.Services.AddSingleton(new MessagingHealthState(
+    required: messagingProvider == MessagingProviderKind.AzureServiceBus));
+if (messagingRuntimeEnabled)
 {
-    var messagingProvider = MessagingRuntimeOptions.Validate(messagingOptions);
     builder.Services.AddScoped<OutboxDispatchProcessor>();
     builder.Services.AddHostedService<OutboxDispatcherHostedService>();
 
@@ -286,6 +291,18 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .WithTags("System")
     .WithSummary("Check API process health")
     .Produces(StatusCodes.Status200OK);
+app.MapGet("/health/messaging", (MessagingHealthState messagingHealth) =>
+        messagingHealth.IsHealthy
+            ? Results.Ok(new { status = "healthy" })
+            : Results.Json(
+                new { status = "degraded", broker = "unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable))
+    .AllowAnonymous()
+    .WithName("MessagingHealth")
+    .WithTags("System")
+    .WithSummary("Check API messaging readiness")
+    .Produces(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status503ServiceUnavailable);
 app.MapCaseLedgerApi();
 app.MapHub<CaseUpdatesHub>("/hubs/cases")
     .RequireAuthorization();

@@ -13,6 +13,18 @@ param namePrefix string = 'caseledger'
 ])
 param environmentName string = 'prod'
 
+@description('Deployment phase. Foundation provisions infrastructure with publishers omitted; application creates revisions only after routing is enforced separately.')
+@allowed([
+  'foundation'
+  'application'
+])
+param deploymentPhase string = 'foundation'
+
+@description('Opaque rollout identifier added to both application templates so every supported application phase creates a fresh healthy revision after routing maintenance.')
+@minLength(1)
+@maxLength(64)
+param deploymentRevision string = 'manual'
+
 @description('Azure region for all regional resources.')
 param location string = resourceGroup().location
 
@@ -118,6 +130,11 @@ param apiMinReplicas int = 1
 @minValue(1)
 param apiMaxReplicas int = 1
 
+@description('Maximum API request-outbox publish attempts. The minimum covers more than 75 minutes of exponential retry so the 60-minute deployment workflow cannot exhaust valid requests while Service Bus routing is reconciled.')
+@minValue(25)
+@maxValue(100)
+param apiOutboxMaxAttempts int = 25
+
 @description('Minimum number of worker replicas. Keep at least one during rehearsals and in production for durable result-outbox recovery. Zero is supported only with the configured Service Bus scale rule.')
 @minValue(0)
 param workerMinReplicas int = 1
@@ -151,27 +168,22 @@ param maximumAuditMessageBytes int = 196608
 @description('Additional Azure resource tags.')
 param additionalTags object = {}
 
-var requestMessageSubject = 'caseledger.audit.verification.requested.v1'
-var resultMessageSubject = 'caseledger.audit.verification.result.v1'
 var auditTopicName = 'caseledger-audit'
 var workerRequestSubscriptionName = 'caseledger-audit-worker'
 var apiResultSubscriptionName = 'caseledger-api-results'
-// Use durable, non-reserved names. Azure creates and manages `$Default` specially,
-// and targeting that name can leave a deployed subscription with no live rule.
-var workerRequestRuleName = 'verification-requests-v1'
-var apiResultRuleName = 'verification-results-v1'
 var evidenceContainerName = 'evidence'
 var dataProtectionContainerName = 'data-protection'
 var deploymentSuffix = take(uniqueString(subscription().id, resourceGroup().id, namePrefix, environmentName), 6)
 var baseName = toLower('${namePrefix}-${environmentName}-${deploymentSuffix}')
 var compactBaseName = replace(baseName, '-', '')
-var tags = union({
+var tags = union(additionalTags, {
   application: 'CaseLedger'
   environment: environmentName
   managedBy: 'Bicep'
-}, additionalTags)
+})
 var demoLoginEnabled = authenticationMode == 'Demo' || authenticationMode == 'DemoAndEntra'
 var entraAuthenticationEnabled = authenticationMode == 'Entra' || authenticationMode == 'DemoAndEntra'
+var deployApplications = deploymentPhase == 'application'
 var storageAccountName = take('st${compactBaseName}', 24)
 var keyVaultName = take('kv-${baseName}', 24)
 var postgresServerName = '${baseName}-pg'
@@ -190,14 +202,6 @@ var keyVaultSecretsUserRoleId = subscriptionResourceId(
 var keyVaultCryptoUserRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
   '12338af0-0e69-4776-bea7-57ae8d297424'
-)
-var serviceBusDataSenderRoleId = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39'
-)
-var serviceBusDataReceiverRoleId = subscriptionResourceId(
-  'Microsoft.Authorization/roleDefinitions',
-  '090c5cfd-751d-490a-894a-3ce6f1109419'
 )
 var storageBlobDataContributorRoleId = subscriptionResourceId(
   'Microsoft.Authorization/roleDefinitions',
@@ -484,75 +488,6 @@ resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
   }
 }
 
-resource auditTopic 'Microsoft.ServiceBus/namespaces/topics@2024-01-01' = {
-  parent: serviceBusNamespace
-  name: auditTopicName
-  properties: {
-    defaultMessageTimeToLive: 'P7D'
-    duplicateDetectionHistoryTimeWindow: 'PT10M'
-    enableBatchedOperations: true
-    enableExpress: false
-    enablePartitioning: serviceBusSkuName == 'Standard'
-    maxMessageSizeInKilobytes: serviceBusSkuName == 'Premium' ? 1024 : 256
-    maxSizeInMegabytes: 1024
-    requiresDuplicateDetection: true
-    status: 'Active'
-    supportOrdering: false
-  }
-}
-
-resource workerRequestSubscription 'Microsoft.ServiceBus/namespaces/topics/subscriptions@2024-01-01' = {
-  parent: auditTopic
-  name: workerRequestSubscriptionName
-  properties: {
-    deadLetteringOnFilterEvaluationExceptions: true
-    deadLetteringOnMessageExpiration: true
-    defaultMessageTimeToLive: 'P7D'
-    enableBatchedOperations: true
-    lockDuration: 'PT1M'
-    maxDeliveryCount: 10
-    requiresSession: false
-    status: 'Active'
-  }
-}
-
-resource workerRequestFilter 'Microsoft.ServiceBus/namespaces/topics/subscriptions/rules@2024-01-01' = {
-  parent: workerRequestSubscription
-  name: workerRequestRuleName
-  properties: {
-    correlationFilter: {
-      label: requestMessageSubject
-    }
-    filterType: 'CorrelationFilter'
-  }
-}
-
-resource apiResultSubscription 'Microsoft.ServiceBus/namespaces/topics/subscriptions@2024-01-01' = {
-  parent: auditTopic
-  name: apiResultSubscriptionName
-  properties: {
-    deadLetteringOnFilterEvaluationExceptions: true
-    deadLetteringOnMessageExpiration: true
-    defaultMessageTimeToLive: 'P7D'
-    enableBatchedOperations: true
-    lockDuration: 'PT1M'
-    maxDeliveryCount: 10
-    requiresSession: false
-    status: 'Active'
-  }
-}
-
-resource apiResultFilter 'Microsoft.ServiceBus/namespaces/topics/subscriptions/rules@2024-01-01' = {
-  parent: apiResultSubscription
-  name: apiResultRuleName
-  properties: {
-    correlationFilter: {
-      label: resultMessageSubject
-    }
-    filterType: 'CorrelationFilter'
-  }
-}
-
 resource apiPostgresKeyVaultRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(apiPostgresSecret.id, apiIdentity.id, keyVaultSecretsUserRoleId)
   scope: apiPostgresSecret
@@ -633,46 +568,6 @@ resource apiDataProtectionCryptoRole 'Microsoft.Authorization/roleAssignments@20
   }
 }
 
-resource apiServiceBusSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(auditTopic.id, apiIdentity.id, serviceBusDataSenderRoleId)
-  scope: auditTopic
-  properties: {
-    principalId: apiIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: serviceBusDataSenderRoleId
-  }
-}
-
-resource apiServiceBusReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(auditTopic.id, apiIdentity.id, serviceBusDataReceiverRoleId)
-  scope: auditTopic
-  properties: {
-    principalId: apiIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: serviceBusDataReceiverRoleId
-  }
-}
-
-resource workerServiceBusSenderRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(auditTopic.id, workerIdentity.id, serviceBusDataSenderRoleId)
-  scope: auditTopic
-  properties: {
-    principalId: workerIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: serviceBusDataSenderRoleId
-  }
-}
-
-resource workerServiceBusReceiverRole 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(auditTopic.id, workerIdentity.id, serviceBusDataReceiverRoleId)
-  scope: auditTopic
-  properties: {
-    principalId: workerIdentity.properties.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: serviceBusDataReceiverRoleId
-  }
-}
-
 var apiPostgresConnectionString = 'Host=${postgresServer.properties.fullyQualifiedDomainName};Port=5432;Database=${postgresDatabaseName};Username=${postgresAdministratorLogin};Password=${postgresAdministratorPassword};SSL Mode=VerifyFull;Trust Server Certificate=false;'
 var workerPostgresConnectionUrl = 'postgresql://${uriComponent(postgresAdministratorLogin)}:${uriComponent(postgresAdministratorPassword)}@${postgresServer.properties.fullyQualifiedDomainName}:5432/${uriComponent(postgresDatabaseName)}?sslmode=verify-full'
 
@@ -730,7 +625,7 @@ var serviceBusFullyQualifiedNamespace = '${serviceBusNamespace.name}.servicebus.
 var dataProtectionKeyBlobUri = '${storageAccount.properties.primaryEndpoints.blob}${dataProtectionContainer.name}/keys.xml'
 var dataProtectionKeyIdentifier = '${keyVault.properties.vaultUri}keys/${dataProtectionKey.name}'
 
-resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
+resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = if (deployApplications) {
   name: apiContainerAppName
   location: location
   tags: tags
@@ -865,8 +760,16 @@ resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
               value: 'true'
             }
             {
+              name: 'CASELEDGER_DEPLOYMENT_REVISION'
+              value: deploymentRevision
+            }
+            {
               name: 'Messaging__Provider'
               value: 'AzureServiceBus'
+            }
+            {
+              name: 'Messaging__MaxAttempts'
+              value: string(apiOutboxMaxAttempts)
             }
             {
               name: 'Messaging__AzureServiceBus__FullyQualifiedNamespace'
@@ -1006,15 +909,11 @@ resource apiContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
     apiStorageRole
     apiDataProtectionStorageRole
     apiDataProtectionCryptoRole
-    apiServiceBusSenderRole
-    apiServiceBusReceiverRole
     postgresDatabase
-    workerRequestFilter
-    apiResultFilter
   ]
 }
 
-resource workerContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
+resource workerContainerApp 'Microsoft.App/containerApps@2025-01-01' = if (deployApplications) {
   name: workerContainerAppName
   location: location
   tags: tags
@@ -1047,6 +946,10 @@ resource workerContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
             {
               name: 'BROKER_PROVIDER'
               value: 'azure-service-bus'
+            }
+            {
+              name: 'CASELEDGER_DEPLOYMENT_REVISION'
+              value: deploymentRevision
             }
             {
               name: 'AZURE_SERVICE_BUS_FULLY_QUALIFIED_NAMESPACE'
@@ -1151,32 +1054,31 @@ resource workerContainerApp 'Microsoft.App/containerApps@2025-01-01' = {
   }
   dependsOn: [
     workerPostgresKeyVaultRole
-    workerServiceBusSenderRole
-    workerServiceBusReceiverRole
     postgresDatabase
-    workerRequestFilter
-    apiResultFilter
   ]
 }
 
-output apiUrl string = 'https://${apiContainerApp.properties.configuration.ingress.fqdn}'
-output entraRedirectUri string = 'https://${apiContainerApp.properties.configuration.ingress.fqdn}/signin-oidc'
-output apiContainerAppName string = apiContainerApp.name
-output workerContainerAppName string = workerContainerApp.name
+output apiUrl string = deployApplications ? 'https://${apiContainerApp!.properties.configuration.ingress.fqdn}' : ''
+output entraRedirectUri string = deployApplications ? 'https://${apiContainerApp!.properties.configuration.ingress.fqdn}/signin-oidc' : ''
+output apiContainerAppName string = '${baseName}-api'
+output workerContainerAppName string = '${baseName}-worker'
 output containerAppsEnvironmentName string = containerAppsEnvironment.name
 output logAnalyticsWorkspaceId string = logAnalytics.id
 output keyVaultUri string = keyVault.properties.vaultUri
 output postgresHost string = postgresServer.properties.fullyQualifiedDomainName
 output postgresDatabase string = postgresDatabase.name
+output serviceBusNamespaceName string = serviceBusNamespace.name
 output serviceBusNamespaceHost string = '${serviceBusNamespace.name}.servicebus.windows.net'
-output serviceBusTopic string = auditTopic.name
-output workerRequestSubscription string = workerRequestSubscription.name
-output apiResultSubscription string = apiResultSubscription.name
+output serviceBusTopic string = auditTopicName
+output workerRequestSubscription string = workerRequestSubscriptionName
+output apiResultSubscription string = apiResultSubscriptionName
 output evidenceBlobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 output evidenceContainer string = evidenceContainer.name
 output dataProtectionContainer string = dataProtectionContainer.name
 output dataProtectionKeyIdentifier string = dataProtectionKeyIdentifier
+output apiIdentityName string = apiIdentity.name
 output apiIdentityClientId string = apiIdentity.properties.clientId
+output workerIdentityName string = workerIdentity.name
 output workerIdentityClientId string = workerIdentity.properties.clientId
 output effectiveMaximumAuditMessageBytes int = effectiveMaximumAuditMessageBytes
 output serviceBusTier string = serviceBusSkuName

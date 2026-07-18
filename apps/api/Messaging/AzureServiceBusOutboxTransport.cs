@@ -95,13 +95,17 @@ public sealed class AzureServiceBusOutboxTransport(
         }
         catch (Exception exception)
         {
+            var retryable = exception is ServiceBusException serviceBusException &&
+                (serviceBusException.IsTransient ||
+                 serviceBusException.Reason == ServiceBusFailureReason.MessagingEntityDisabled);
             logger.LogWarning(
                 "Azure Service Bus publish failed with {FailureType}.",
                 exception.GetType().Name);
             throw new OutboxTransportException(
                 "AZURE_SERVICE_BUS_SEND_FAILED",
                 "Azure Service Bus did not accept the outbox message.",
-                exception);
+                exception,
+                retryable);
         }
     }
 

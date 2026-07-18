@@ -101,6 +101,32 @@ public sealed class MessagingRuntimeTests
     }
 
     [Fact]
+    public async Task RetryableTransportFailureDoesNotDeadLetterAtMaximumAttempts()
+    {
+        using var factory = new CaseLedgerFactory();
+        await using var scope = factory.Services.CreateAsyncScope();
+        var db = scope.ServiceProvider.GetRequiredService<CaseLedgerDbContext>();
+        var message = await AddOutboxAsync(db, attemptCount: 1);
+        var transport = new FakeOutboxTransport(
+            new OutboxTransportException(
+                "BROKER_UNAVAILABLE",
+                "The fake broker is unavailable.",
+                retryable: true));
+        var clock = new TestTimeProvider(Now);
+        var processor = CreateProcessor(db, transport, clock, maxAttempts: 2);
+
+        Assert.Equal(1, await processor.DispatchBatchAsync());
+
+        var stored = await db.OutboxMessages.AsNoTracking()
+            .SingleAsync(item => item.Id == message.Id);
+        Assert.Equal(2, stored.AttemptCount);
+        Assert.Equal(Now.UtcDateTime.AddSeconds(4), stored.NextAttemptAt);
+        Assert.Null(stored.DeadLetteredAt);
+        Assert.Equal("BROKER_UNAVAILABLE", stored.LastErrorCode);
+        Assert.Null(stored.LockId);
+    }
+
+    [Fact]
     public async Task AttemptZeroValidResultCompletesJob()
     {
         using var factory = new CaseLedgerFactory();

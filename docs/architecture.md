@@ -140,7 +140,17 @@ Azure Service Bus is an implemented provider. The checked-in Bicep package provi
    `caseledger.audit.verification.result.v1` (SQL equivalent:
    `sys.Label = 'caseledger.audit.verification.result.v1'`).
 
-The subscriptions do not retain an unfiltered default rule. Both consumers use PeekLock with
+The Bicep package deploys in staged phases. The foundation phase omits application revisions and does
+not update topic routing, so a fresh environment has no publishers and a prior fail-closed state is
+preserved. After ARM succeeds, a narrow routing template writes the topic and subscriptions disabled
+before their child rules. The checked-in enforcer then removes Azure's implicit unfiltered `$Default`
+rule, verifies this exact two-filter contract, activates both subscriptions, and enables topic
+publishing last. The
+application phase then creates API and worker revisions with
+the validated routing active, avoiding a readiness deadlock. A control-plane gate requires both
+revisions to be uniquely active, healthy, latest-ready, and marked for the current rollout before the
+deployment succeeds. Worker readiness and the API deployment smoke gate also require non-destructive
+receive and send-link probes to Service Bus while API process liveness remains independent. Both consumers use PeekLock with
 automatic completion disabled. Valid work is completed explicitly, rejected contracts are
 dead-lettered with sanitized reasons, and infrastructure failures are abandoned. Worker retries are
 scheduled topic messages with a unique broker message ID per attempt while the application `jobId`
@@ -202,7 +212,7 @@ Delivery is intentionally at least once across each network boundary:
 
 | Boundary | Durable state | Duplicate protection | Failure path |
 | --- | --- | --- | --- |
-| API to broker | API request outbox | message/job ID | exponential publish retry, then outbox dead-letter state |
+| API to broker | API request outbox | message/job ID | retryable broker failures remain pending with capped exponential delay; non-retryable failures dead-letter at the configured limit |
 | Broker to worker | worker inbox | `jobId` plus versioned full-request fingerprint | three retry tiers, then broker DLQ and terminal error result |
 | Worker to broker | worker result outbox | deterministic `resultId` | leased exponential publish retry |
 | Broker to API | verification job | validated `resultId` and result fields | invalid result DLQ; infrastructure requeue/abandon |
