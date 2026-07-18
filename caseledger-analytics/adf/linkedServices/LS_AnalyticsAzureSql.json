@@ -20,10 +20,6 @@
       "KeyVaultUrl": {
         "type": "String"
       }
-    },
-    "connectVia": {
-      "referenceName": "AutoResolveIntegrationRuntime",
-      "type": "IntegrationRuntimeReference"
     }
   }
 }

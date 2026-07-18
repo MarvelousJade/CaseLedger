@@ -7,10 +7,13 @@ Key Vault secrets after deployment, then publish the versioned definitions in
 `../../adf` with your normal ADF release process.
 
 ```powershell
+$env:CASELEDGER_SQL_ADMIN_PASSWORD = Read-Host `
+  -Prompt 'SQL administrator password' -AsSecureString `
+  | ConvertFrom-SecureString -AsPlainText
 az deployment group what-if `
   --resource-group <analytics-resource-group> `
-  --parameters main.bicepparam `
-  --parameters sqlAdministratorPassword='<secure-runtime-value>'
+  --parameters main.bicepparam
+Remove-Item Env:CASELEDGER_SQL_ADMIN_PASSWORD
 ```
 
 Review cost, networking, and the SQL firewall before applying. The checked-in

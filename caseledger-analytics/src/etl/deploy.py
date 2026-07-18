@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from sqlalchemy import Engine, text
+from sqlalchemy.exc import DBAPIError
 
 from etl.config import Settings
 from etl.db import create_warehouse_engine
@@ -35,6 +36,12 @@ def split_sql_batches(script: str) -> Iterator[str]:
             yield cleaned
 
 
+def is_database_already_exists_error(error: BaseException) -> bool:
+    original = getattr(error, "orig", error)
+    details = " ".join(str(argument) for argument in getattr(original, "args", (original,)))
+    return re.search(r"(?:^|\D)1801(?:\D|$)", details) is not None
+
+
 def create_database(settings: Settings) -> None:
     engine = create_warehouse_engine(settings, master=True)
     database = settings.sqlserver_database
@@ -45,7 +52,13 @@ def create_database(settings: Settings) -> None:
                 {"database_name": database},
             ).scalar_one()
             if not exists:
-                connection.exec_driver_sql(f"CREATE DATABASE [{database}]")
+                try:
+                    connection.exec_driver_sql(f"CREATE DATABASE [{database}]")
+                except DBAPIError as error:
+                    # Azure SQL can hide databases from DB_ID even when they already exist.
+                    # SQL Server error 1801 makes this operation safely idempotent.
+                    if not is_database_already_exists_error(error):
+                        raise
     finally:
         engine.dispose()
 
