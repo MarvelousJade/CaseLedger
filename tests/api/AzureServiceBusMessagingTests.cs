@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Azure.Messaging.ServiceBus;
 using CaseLedger.Api.Messaging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -13,6 +14,20 @@ public sealed class AzureServiceBusMessagingTests
         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private const string ChainHead =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    [Fact]
+    public void MessagingHealthRequiresAnExplicitBrokerProbeWhenEnabled()
+    {
+        var required = new MessagingHealthState(required: true);
+        Assert.False(required.IsHealthy);
+
+        required.ReportBrokerReady(true);
+        Assert.True(required.IsHealthy);
+
+        required.ReportBrokerReady(false);
+        Assert.False(required.IsHealthy);
+        Assert.True(new MessagingHealthState(required: false).IsHealthy);
+    }
 
     [Fact]
     public void ProviderValidationAcceptsAzureAndKeepsRabbitMqDefault()
@@ -127,8 +142,10 @@ public sealed class AzureServiceBusMessagingTests
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/health");
+        var messagingResponse = await client.GetAsync("/health/messaging");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, messagingResponse.StatusCode);
     }
 
     [Fact]
@@ -155,6 +172,51 @@ public sealed class AzureServiceBusMessagingTests
         Assert.Equal(id.ToString("D"), sent.MessageId);
         Assert.Equal(AuditVerificationScheduler.RequestMessageType, sent.Subject);
         Assert.Equal(1, sent.SchemaVersion);
+    }
+
+    [Fact]
+    public async Task AzurePermanentBrokerSendFailureKeepsFiniteBudget()
+    {
+        var transport = new AzureServiceBusOutboxTransport(
+            new FailingMessageSender(new InvalidOperationException("Synthetic permanent failure.")),
+            NullLogger<AzureServiceBusOutboxTransport>.Instance);
+        var id = Guid.NewGuid();
+        var payload = $"{{\"schemaVersion\":1,\"jobId\":\"{id:D}\",\"correlationId\":\"trace-123\"}}";
+
+        var exception = await Assert.ThrowsAsync<OutboxTransportException>(
+            () => transport.PublishAsync(
+                new OutboxDispatchMessage(
+                    id,
+                    AuditVerificationScheduler.RequestMessageType,
+                    payload),
+                CancellationToken.None));
+
+        Assert.Equal("AZURE_SERVICE_BUS_SEND_FAILED", exception.ErrorCode);
+        Assert.False(exception.Retryable);
+    }
+
+    [Theory]
+    [InlineData(ServiceBusFailureReason.ServiceTimeout)]
+    [InlineData(ServiceBusFailureReason.MessagingEntityDisabled)]
+    public async Task AzureTransientAndMaintenanceFailuresRemainRetryable(
+        ServiceBusFailureReason reason)
+    {
+        var transport = new AzureServiceBusOutboxTransport(
+            new FailingMessageSender(new ServiceBusException("Synthetic outage.", reason)),
+            NullLogger<AzureServiceBusOutboxTransport>.Instance);
+        var id = Guid.NewGuid();
+        var payload = $"{{\"schemaVersion\":1,\"jobId\":\"{id:D}\",\"correlationId\":\"trace-123\"}}";
+
+        var exception = await Assert.ThrowsAsync<OutboxTransportException>(
+            () => transport.PublishAsync(
+                new OutboxDispatchMessage(
+                    id,
+                    AuditVerificationScheduler.RequestMessageType,
+                    payload),
+                CancellationToken.None));
+
+        Assert.Equal("AZURE_SERVICE_BUS_SEND_FAILED", exception.ErrorCode);
+        Assert.True(exception.Retryable);
     }
 
     [Theory]
@@ -330,6 +392,15 @@ public sealed class AzureServiceBusMessagingTests
             Messages.Add(message);
             return Task.CompletedTask;
         }
+    }
+
+    private sealed class FailingMessageSender(Exception exception)
+        : IAzureServiceBusMessageSender
+    {
+        public Task SendAsync(
+            AzureServiceBusOutboundMessage message,
+            CancellationToken cancellationToken) =>
+            throw exception;
     }
 
     private sealed class FakeResultApplier : IAuditVerificationResultApplier

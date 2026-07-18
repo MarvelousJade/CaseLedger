@@ -45,6 +45,7 @@ jobs:
       CASELEDGER_ENTRA_CLIENT_ID: ${{ vars.CASELEDGER_ENTRA_CLIENT_ID }}
       CASELEDGER_ENTRA_AUTO_PROVISION_ANALYST: ${{ vars.CASELEDGER_ENTRA_AUTO_PROVISION_ANALYST }}
       CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID: ${{ vars.CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID }}
+      CONTAINERAPP_EXTENSION_VERSION: 1.3.0b4
       RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
       DEPLOYMENT_ENVIRONMENT: ${{ inputs.environment_name }}
       IMAGE_SHA_INPUT: ${{ inputs.image_sha }}
@@ -156,7 +157,14 @@ jobs:
           done
 
       - name: Compile Bicep
-        run: az bicep build --file infra/azure/main.bicep --stdout > /dev/null
+        shell: bash
+        run: |
+          set -euo pipefail
+          az bicep build --file infra/azure/main.bicep --stdout > /dev/null
+          az bicep build --file infra/azure/servicebus-routing.bicep --stdout > /dev/null
+
+      - name: Install pinned Container Apps CLI extension
+        run: az extension add --name containerapp --version "$CONTAINERAPP_EXTENSION_VERSION" --allow-preview true --yes --only-show-errors
 
       - name: Log in to Azure with OIDC
         uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2.3.0
@@ -193,6 +201,8 @@ jobs:
             --parameters infra/azure/main.bicepparam \
             --parameters \
               environmentName="$DEPLOYMENT_ENVIRONMENT" \
+              deploymentPhase=application \
+              deploymentRevision="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               apiImage="$API_IMAGE" \
               workerImage="$WORKER_IMAGE" \
               postgresSkuName="$POSTGRES_SKU_NAME" \
@@ -206,7 +216,50 @@ jobs:
               workerMaxReplicas="$WORKER_MAX_REPLICAS" \
             --only-show-errors
 
-      - name: Deploy infrastructure
+          namespace_json="$(az servicebus namespace list \
+            --resource-group "$RESOURCE_GROUP" \
+            --only-show-errors \
+            --output json)"
+          mapfile -t managed_namespaces < <(jq -r --arg environment "$DEPLOYMENT_ENVIRONMENT" \
+            '.[] | select((.tags.application // "") == "CaseLedger" and (.tags.environment // "") == $environment) | .name' \
+            <<< "$namespace_json")
+          if [[ ${#managed_namespaces[@]} -eq 0 ]]; then
+            echo 'No existing managed Service Bus namespace was found; routing what-if is deferred until the foundation exists.'
+          elif [[ ${#managed_namespaces[@]} -ne 1 ]]; then
+            echo "Expected one managed Service Bus namespace; found ${#managed_namespaces[@]}." >&2
+            exit 1
+          else
+            identity_json="$(az identity list \
+              --resource-group "$RESOURCE_GROUP" \
+              --only-show-errors \
+              --output json)"
+            mapfile -t managed_api_identities < <(jq -r --arg environment "$DEPLOYMENT_ENVIRONMENT" \
+              '.[] | select((.tags.application // "") == "CaseLedger" and (.tags.environment // "") == $environment and (.name | endswith("-api-id"))) | .name' \
+              <<< "$identity_json")
+            mapfile -t managed_worker_identities < <(jq -r --arg environment "$DEPLOYMENT_ENVIRONMENT" \
+              '.[] | select((.tags.application // "") == "CaseLedger" and (.tags.environment // "") == $environment and (.name | endswith("-worker-id"))) | .name' \
+              <<< "$identity_json")
+            if [[ ${#managed_api_identities[@]} -ne 1 || ${#managed_worker_identities[@]} -ne 1 ]]; then
+              echo 'Expected one managed API identity and one managed worker identity for routing what-if.' >&2
+              exit 1
+            fi
+            az deployment group what-if \
+              --name "caseledger-${GITHUB_RUN_ID}-routing" \
+              --resource-group "$RESOURCE_GROUP" \
+              --template-file infra/azure/servicebus-routing.bicep \
+              --parameters \
+                serviceBusNamespaceName="${managed_namespaces[0]}" \
+                apiIdentityName="${managed_api_identities[0]}" \
+                workerIdentityName="${managed_worker_identities[0]}" \
+              --only-show-errors
+          fi
+
+      - name: Protect existing API outbox before routing maintenance
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: pwsh
+        run: ./infra/azure/prepare-servicebus-maintenance.ps1 -ResourceGroup $env:RESOURCE_GROUP -EnvironmentName $env:DEPLOYMENT_ENVIRONMENT
+
+      - name: Stage foundation with application revisions omitted
         if: ${{ inputs.operation == 'deploy' }}
         shell: bash
         env:
@@ -234,12 +287,14 @@ jobs:
             fi
           fi
           az deployment group create \
-            --name "caseledger-${GITHUB_RUN_ID}" \
+            --name "caseledger-${GITHUB_RUN_ID}-foundation" \
             --resource-group "$RESOURCE_GROUP" \
             --template-file infra/azure/main.bicep \
             --parameters infra/azure/main.bicepparam \
             --parameters \
               environmentName="$DEPLOYMENT_ENVIRONMENT" \
+              deploymentPhase=foundation \
+              deploymentRevision="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
               apiImage="$API_IMAGE" \
               workerImage="$WORKER_IMAGE" \
               postgresSkuName="$POSTGRES_SKU_NAME" \
@@ -251,7 +306,81 @@ jobs:
               apiMaxReplicas="$API_MAX_REPLICAS" \
               workerMinReplicas="$WORKER_MIN_REPLICAS" \
               workerMaxReplicas="$WORKER_MAX_REPLICAS" \
+            --mode Incremental \
+            --only-show-errors > foundation-deployment.json
+
+      - name: Stage Service Bus routing fail closed
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          service_bus_namespace_name="$(jq -er '.properties.outputs.serviceBusNamespaceName.value' foundation-deployment.json)"
+          api_identity_name="$(jq -er '.properties.outputs.apiIdentityName.value' foundation-deployment.json)"
+          worker_identity_name="$(jq -er '.properties.outputs.workerIdentityName.value' foundation-deployment.json)"
+          for resource_name in "$service_bus_namespace_name" "$api_identity_name" "$worker_identity_name"; do
+            if [[ ! "$resource_name" =~ ^[a-z0-9-]+$ ]]; then
+              echo "Foundation returned an invalid routing resource name: $resource_name" >&2
+              exit 1
+            fi
+          done
+          az deployment group create \
+            --name "caseledger-${GITHUB_RUN_ID}-routing" \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/azure/servicebus-routing.bicep \
+            --parameters \
+              serviceBusNamespaceName="$service_bus_namespace_name" \
+              apiIdentityName="$api_identity_name" \
+              workerIdentityName="$worker_identity_name" \
+            --mode Incremental \
+            --only-show-errors > routing-deployment.json
+
+      - name: Reconcile exact Service Bus routing before application rollout
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: pwsh
+        run: ./infra/azure/enforce-servicebus-rules.ps1 -ResourceGroup $env:RESOURCE_GROUP -DeploymentFile routing-deployment.json
+
+      - name: Deploy application revisions with routing active
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: bash
+        env:
+          CASELEDGER_POSTGRES_ADMIN_PASSWORD: ${{ secrets.AZURE_POSTGRES_ADMIN_PASSWORD }}
+          CASELEDGER_SEED_ADMIN_PASSWORD: ${{ secrets.CASELEDGER_SEED_ADMIN_PASSWORD }}
+          CASELEDGER_SEED_ANALYST_PASSWORD: ${{ secrets.CASELEDGER_SEED_ANALYST_PASSWORD }}
+          CASELEDGER_ENTRA_CLIENT_SECRET: ${{ secrets.CASELEDGER_ENTRA_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          az deployment group create \
+            --name "caseledger-${GITHUB_RUN_ID}" \
+            --resource-group "$RESOURCE_GROUP" \
+            --template-file infra/azure/main.bicep \
+            --parameters infra/azure/main.bicepparam \
+            --parameters \
+              environmentName="$DEPLOYMENT_ENVIRONMENT" \
+              deploymentPhase=application \
+              deploymentRevision="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              apiImage="$API_IMAGE" \
+              workerImage="$WORKER_IMAGE" \
+              postgresSkuName="$POSTGRES_SKU_NAME" \
+              postgresSkuTier="$POSTGRES_SKU_TIER" \
+              postgresStorageSizeGb="$POSTGRES_STORAGE_SIZE_GB" \
+              postgresBackupRetentionDays="$POSTGRES_BACKUP_RETENTION_DAYS" \
+              postgresHighAvailabilityMode="$POSTGRES_HIGH_AVAILABILITY_MODE" \
+              apiMinReplicas="$API_MIN_REPLICAS" \
+              apiMaxReplicas="$API_MAX_REPLICAS" \
+              workerMinReplicas="$WORKER_MIN_REPLICAS" \
+              workerMaxReplicas="$WORKER_MAX_REPLICAS" \
+            --mode Incremental \
             --only-show-errors > deployment.json
+
+      - name: Confirm exact Service Bus routing after application rollout
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: pwsh
+        run: ./infra/azure/enforce-servicebus-rules.ps1 -ResourceGroup $env:RESOURCE_GROUP -DeploymentFile deployment.json -VerifyOnly
+
+      - name: Verify deployed Container App revisions
+        if: ${{ inputs.operation == 'deploy' }}
+        shell: pwsh
+        run: ./infra/azure/verify-container-app-revisions.ps1 -ResourceGroup $env:RESOURCE_GROUP -DeploymentFile deployment.json -ExpectedDeploymentRevision "$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
 
       - name: Publish deployment URL
         if: ${{ inputs.operation == 'deploy' }}
@@ -267,30 +396,38 @@ jobs:
           echo "API_URL=$api_url" >> "$GITHUB_ENV"
           printf '### Azure deployment\n\nApplication: %s\n\nEntra redirect URI: `%s`\n' "$api_url" "$entra_redirect_uri" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Smoke check deployed API health
+      - name: Smoke check deployed API process and messaging health
         if: ${{ inputs.operation == 'deploy' }}
         shell: bash
         run: |
           set -euo pipefail
-          health_url="${API_URL%/}/health"
-          for attempt in $(seq 1 30); do
-            status="$(curl --silent --show-error \
-              --output health.json \
-              --write-out '%{http_code}' \
-              --connect-timeout 5 \
-              --max-time 10 \
-              "$health_url" || true)"
-            if [[ "$status" == '200' ]] && jq -e '.status == "healthy"' health.json > /dev/null 2>&1; then
-              echo "API health check passed on attempt $attempt."
-              exit 0
+          for health_path in health health/messaging; do
+            health_label="${health_path//\//-}"
+            health_file="${health_label}.json"
+            health_url="${API_URL%/}/$health_path"
+            passed='false'
+            for attempt in $(seq 1 30); do
+              status="$(curl --silent --show-error \
+                --output "$health_file" \
+                --write-out '%{http_code}' \
+                --connect-timeout 5 \
+                --max-time 10 \
+                "$health_url" || true)"
+              if [[ "$status" == '200' ]] && jq -e '.status == "healthy"' "$health_file" > /dev/null 2>&1; then
+                echo "API $health_path check passed on attempt $attempt."
+                passed='true'
+                break
+              fi
+              echo "API $health_path check attempt $attempt returned HTTP ${status:-unreachable}; retrying."
+              sleep 10
+            done
+            if [[ "$passed" != 'true' ]]; then
+              echo "API health check did not pass within five minutes: $health_url" >&2
+              exit 1
             fi
-            echo "API health check attempt $attempt returned HTTP ${status:-unreachable}; retrying."
-            sleep 10
           done
-          echo "API health check did not pass within five minutes: $health_url" >&2
-          exit 1
 
       - name: Remove deployment output
         if: always()
         shell: bash
-        run: rm -f deployment.json health.json
+        run: rm -f foundation-deployment.json routing-deployment.json deployment.json health.json health-messaging.json

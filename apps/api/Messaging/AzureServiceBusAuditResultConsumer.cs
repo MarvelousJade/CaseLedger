@@ -6,6 +6,7 @@ namespace CaseLedger.Api.Messaging;
 public sealed class AzureServiceBusAuditResultConsumer(
     IServiceScopeFactory scopeFactory,
     IOptions<MessagingOptions> options,
+    MessagingHealthState health,
     ILogger<AzureServiceBusAuditResultConsumer> logger)
     : BackgroundService
 {
@@ -24,6 +25,7 @@ public sealed class AzureServiceBusAuditResultConsumer(
             }
             catch (Exception exception)
             {
+                health.ReportBrokerReady(false);
                 logger.LogError(
                     "Azure Service Bus result consumer stopped with {FailureType}; reconnecting.",
                     exception.GetType().Name);
@@ -36,6 +38,7 @@ public sealed class AzureServiceBusAuditResultConsumer(
     {
         var settings = options.Value.AzureServiceBus;
         await using var client = AzureServiceBusClientFactory.Create(settings);
+        await ProbeBrokerAsync(client, settings, stoppingToken);
         await using var processor = client.CreateProcessor(
             settings.TopicName!,
             settings.ResultSubscriptionName!,
@@ -51,16 +54,58 @@ public sealed class AzureServiceBusAuditResultConsumer(
         processor.ProcessErrorAsync += ProcessErrorAsync;
 
         await processor.StartProcessingAsync(stoppingToken);
+        health.ReportBrokerReady(true);
         logger.LogInformation(
             "Azure Service Bus audit verification result consumer is ready.");
         try
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+            using var probeTimer = new PeriodicTimer(TimeSpan.FromSeconds(30));
+            while (await probeTimer.WaitForNextTickAsync(stoppingToken))
+            {
+                try
+                {
+                    await ProbeBrokerAsync(client, settings, stoppingToken);
+                    health.ReportBrokerReady(true);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception exception)
+                {
+                    health.ReportBrokerReady(false);
+                    logger.LogWarning(
+                        "Azure Service Bus readiness probe failed with {FailureType}.",
+                        exception.GetType().Name);
+                }
+            }
         }
         finally
         {
+            health.ReportBrokerReady(false);
             await processor.StopProcessingAsync(CancellationToken.None);
         }
+    }
+
+    private static async Task ProbeBrokerAsync(
+        ServiceBusClient client,
+        AzureServiceBusOptions settings,
+        CancellationToken cancellationToken)
+    {
+        await using var receiver = client.CreateReceiver(
+            settings.TopicName!,
+            settings.ResultSubscriptionName!,
+            new ServiceBusReceiverOptions
+            {
+                ReceiveMode = ServiceBusReceiveMode.PeekLock
+            });
+        await using var sender = client.CreateSender(settings.TopicName!);
+
+        _ = await receiver.PeekMessagesAsync(
+            maxMessages: 1,
+            fromSequenceNumber: null,
+            cancellationToken: cancellationToken);
+        using var batch = await sender.CreateMessageBatchAsync(cancellationToken);
     }
 
     private async Task ProcessMessageAsync(ProcessMessageEventArgs arguments)
@@ -73,10 +118,12 @@ public sealed class AzureServiceBusAuditResultConsumer(
             arguments.Message.Body.ToMemory(),
             new ServiceBusResultSettlement(arguments),
             arguments.CancellationToken);
+        health.ReportBrokerReady(true);
     }
 
     private Task ProcessErrorAsync(ProcessErrorEventArgs arguments)
     {
+        health.ReportBrokerReady(false);
         logger.LogError(
             "Azure Service Bus processor reported {FailureType} from {ErrorSource}.",
             arguments.Exception.GetType().Name,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   MessageHandlers,
+  ProcessErrorArgs,
   ServiceBusMessage,
   ServiceBusReceivedMessage,
   ServiceBusReceiver,
@@ -16,7 +17,7 @@ import {
   safeDeadLetterReason,
   type ServiceBusClientLike,
 } from "../src/azure-service-bus.ts";
-import type { WorkerConfig } from "../src/config.ts";
+import type { AzureServiceBusBrokerConfig, WorkerConfig } from "../src/config.ts";
 import type {
   VerificationRequest,
   VerificationResultMessage,
@@ -231,7 +232,13 @@ test("Service Bus result publication is driven by the durable outbox", async () 
 test("host binds the configured topic subscription with manual settlement", async () => {
   let handlers: MessageHandlers | undefined;
   let subscribeOptions: SubscribeOptions | undefined;
+  let receiverProbeCount = 0;
+  let senderProbeCount = 0;
   const receiver = {
+    async peekMessages() {
+      receiverProbeCount += 1;
+      return [];
+    },
     subscribe(value: MessageHandlers, options?: SubscribeOptions) {
       handlers = value;
       subscribeOptions = options;
@@ -243,6 +250,10 @@ test("host binds the configured topic subscription with manual settlement", asyn
     async close() {},
   } as unknown as ServiceBusReceiver;
   const topicSender = {
+    async createMessageBatch() {
+      senderProbeCount += 1;
+      return {};
+    },
     async scheduleMessages() {
       return [];
     },
@@ -316,17 +327,103 @@ test("host binds the configured topic subscription with manual settlement", asyn
       health,
     },
     () => client,
+    20,
   );
 
   try {
-    assert.deepEqual(receiverCalls, [["audit-messages", "audit-worker"]]);
-    assert.deepEqual(senderCalls, ["audit-messages"]);
+    assert.deepEqual(receiverCalls.slice(0, 2), [
+      ["audit-messages", "audit-worker"],
+      ["audit-messages", "audit-worker"],
+    ]);
+    assert.deepEqual(senderCalls.slice(0, 2), ["audit-messages", "audit-messages"]);
+    assert.ok(receiverProbeCount >= 1);
+    assert.ok(senderProbeCount >= 1);
     assert.equal(subscribeOptions?.autoCompleteMessages, false);
     assert.equal(subscribeOptions?.maxConcurrentCalls, 4);
     assert.equal(health.broker, true);
     assert.ok(handlers);
     await handlers!.processMessage(receivedMessage());
+    await handlers!.processError({
+      error: new Error("transient receiver error"),
+      errorSource: "receive",
+    } as ProcessErrorArgs);
+    assert.equal(health.broker, false);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(health.broker, true);
+    assert.ok(receiverProbeCount >= 2);
+    assert.ok(senderProbeCount >= 2);
   } finally {
     await runtime.close();
   }
+});
+
+test("host stays unhealthy and closes broker resources when its probe fails", async () => {
+  const closed: string[] = [];
+  const receiver = {
+    async peekMessages() {
+      throw new Error("receiver probe failed");
+    },
+    async close() {
+      closed.push("receiver");
+    },
+  } as unknown as ServiceBusReceiver;
+  const topicSender = {
+    async createMessageBatch() {
+      return {};
+    },
+    async close() {
+      closed.push("sender");
+    },
+  } as unknown as ServiceBusSender;
+  const client: ServiceBusClientLike = {
+    createReceiver() {
+      return receiver;
+    },
+    createSender() {
+      return topicSender;
+    },
+    async close() {
+      closed.push("client");
+    },
+  };
+  const config: WorkerConfig = {
+    broker: {
+      provider: "azure-service-bus",
+      connectionString: "not-logged",
+      topic: "audit-messages",
+      requestSubscription: "audit-worker",
+    },
+    databaseUrl: "not-used",
+    healthHost: "127.0.0.1",
+    healthPort: 8081,
+    prefetch: 4,
+    maximumMessageBytes: 1024 * 1024,
+    outboxPollMilliseconds: 10,
+    outboxBatchSize: 10,
+    outboxLeaseSeconds: 30,
+    workerVersion: "test",
+  };
+  const health: HealthState = {
+    database: true,
+    broker: false,
+    brokerProvider: "azure-service-bus",
+  };
+
+  await assert.rejects(
+    startAzureServiceBusHost(
+      config.broker as AzureServiceBusBrokerConfig,
+      {
+        config,
+        repository: {} as never,
+        processor: {} as never,
+        logger,
+        health,
+      },
+      () => client,
+    ),
+    /receiver probe failed/,
+  );
+
+  assert.equal(health.broker, false);
+  assert.deepEqual(closed.sort(), ["client", "receiver", "sender"]);
 });

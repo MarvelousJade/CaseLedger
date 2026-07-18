@@ -11,8 +11,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $templatePath = Join-Path $PSScriptRoot 'main.bicep'
+$routingTemplatePath = Join-Path $PSScriptRoot 'servicebus-routing.bicep'
 $parameterPath = Join-Path $PSScriptRoot 'main.bicepparam'
 $compiledPath = Join-Path ([System.IO.Path]::GetTempPath()) "caseledger-azure-$PID.json"
+$compiledRoutingPath = Join-Path ([System.IO.Path]::GetTempPath()) "caseledger-servicebus-routing-$PID.json"
 
 if (-not (Get-Command az -ErrorAction SilentlyContinue)) {
     throw 'Azure CLI was not found. Install it from https://learn.microsoft.com/cli/azure/install-azure-cli, then reopen PowerShell.'
@@ -22,6 +24,10 @@ try {
     & az bicep build --file $templatePath --outfile $compiledPath
     if ($LASTEXITCODE -ne 0) {
         throw 'Bicep compilation failed.'
+    }
+    & az bicep build --file $routingTemplatePath --outfile $compiledRoutingPath
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Service Bus routing Bicep compilation failed.'
     }
 
     Write-Host 'Bicep compilation passed.'
@@ -85,7 +91,9 @@ try {
         '--resource-group', $ResourceGroup,
         '--template-file', $templatePath,
         '--parameters', $parameterPath,
-        "environmentName=$EnvironmentName"
+        "environmentName=$EnvironmentName",
+        'deploymentPhase=application',
+        'deploymentRevision=validation'
     )
     if ($EnvironmentName -eq 'prod') {
         $validationArguments += @(
@@ -113,7 +121,7 @@ try {
             'workerMaxReplicas=1'
         )
     }
-    $validationArguments += '--only-show-errors'
+    $validationArguments += @('--only-show-errors', '--output', 'none')
 
     & az @validationArguments
 
@@ -125,4 +133,5 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $compiledPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $compiledRoutingPath -Force -ErrorAction SilentlyContinue
 }

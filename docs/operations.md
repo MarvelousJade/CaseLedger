@@ -194,12 +194,36 @@ The template creates one topic and two subscriptions:
 Each subscription has only its exact subject filter. Requests, scheduled retries, and results share
 the same topic. Both consumers use PeekLock and manual settlement: successful work is completed,
 invalid contracts are dead-lettered, and infrastructure failures are abandoned for redelivery.
+Azure creates a match-all `$Default` rule with a new subscription. Every supported deployment uses
+staged phases: `foundation` omits API and worker revisions and does not update the topic or
+subscriptions, so a fresh environment has no publishers and a prior fail-closed environment stays
+closed. After ARM succeeds, the narrow `infra/azure/servicebus-routing.bicep` deployment writes the
+topic and subscriptions as disabled before their rules; `infra/azure/enforce-servicebus-rules.ps1`
+removes unexpected rules and activates both subscriptions only after the complete contract passes,
+then enables the topic last; `application` deploys the new
+revisions with routing active. A final read-only enforcer pass confirms the invariant without
+suspending healthy consumers. The GitHub workflow
+performs this sequence automatically, while direct deployments must invoke both scripts and phases.
+
+Before foundation deployment, `infra/azure/prepare-servicebus-maintenance.ps1` raises and verifies any
+existing API at 100 request-outbox attempts, protecting the transition from an older finite-budget
+revision. The deployed API treats broker transport outages as retryable and keeps those durable rows
+pending regardless of the ordinary 25-attempt limit; malformed or otherwise non-retryable work still
+dead-letters at the configured limit. A fresh deployment has no publisher and safely skips preflight.
+The application phase changes `CASELEDGER_DEPLOYMENT_REVISION` on every workflow attempt, ensuring a
+fresh worker revision reports broker health after maintenance even when the image is unchanged. The
+workflow succeeds only after both the API and worker have exactly one active, healthy, latest-ready
+revision carrying that attempt's marker. Worker readiness and the API `/health/messaging` deployment
+gate additionally require successful, non-destructive Service Bus receive and send-link probes. The
+API process-only `/health` endpoint stays available during a broker outage so durable request outbox
+work can still be accepted.
 
 The Bicep deployment configures the API with the Service Bus fully qualified namespace and its
 user-assigned managed identity. For a manually provisioned environment, configure:
 
 - `Messaging__Enabled`
 - `Messaging__Provider`
+- `Messaging__MaxAttempts`
 - `Messaging__AzureServiceBus__ConnectionString`
 - `Messaging__AzureServiceBus__FullyQualifiedNamespace`
 - `Messaging__AzureServiceBus__ManagedIdentityClientId`

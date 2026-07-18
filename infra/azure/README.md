@@ -74,13 +74,21 @@ reused for Azure.
 ## Prerequisites
 
 1. Azure CLI with Bicep support
-2. An Azure subscription and an existing resource group
-3. Permission to create the listed resources and role assignments
-4. Registered resource providers: `Microsoft.App`, `Microsoft.Authorization`, `Microsoft.DBforPostgreSQL`, `Microsoft.Insights`, `Microsoft.KeyVault`, `Microsoft.ManagedIdentity`, `Microsoft.Network`, `Microsoft.OperationalInsights`, `Microsoft.ServiceBus`, and `Microsoft.Storage`
+2. Azure Container Apps CLI extension `1.3.0b4` (the workflow installs this exact version)
+3. An Azure subscription and an existing resource group
+4. Permission to create the listed resources and role assignments
+5. Registered resource providers: `Microsoft.App`, `Microsoft.Authorization`, `Microsoft.DBforPostgreSQL`, `Microsoft.Insights`, `Microsoft.KeyVault`, `Microsoft.ManagedIdentity`, `Microsoft.Network`, `Microsoft.OperationalInsights`, `Microsoft.ServiceBus`, and `Microsoft.Storage`
 
 Provider registration example:
 
 ```powershell
+az extension add `
+  --name containerapp `
+  --version 1.3.0b4 `
+  --allow-preview true `
+  --yes `
+  --only-show-errors
+
 $providers = @(
   'Microsoft.App',
   'Microsoft.Authorization',
@@ -112,21 +120,82 @@ $env:CASELEDGER_ENTRA_BOOTSTRAP_ADMIN_OBJECT_ID = '<administrator-object-guid>'
 ./infra/azure/validate.ps1
 ./infra/azure/validate.ps1 -ResourceGroup 'caseledger-staging' -EnvironmentName staging
 
+$resourceGroup = 'caseledger-staging'
+$deploymentRevision = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+$deploymentArguments = @(
+  'deployment', 'group', 'create',
+  '--resource-group', $resourceGroup,
+  '--template-file', './infra/azure/main.bicep',
+  '--parameters', './infra/azure/main.bicepparam',
+  '--parameters',
+  'environmentName=staging',
+  "deploymentRevision=$deploymentRevision",
+  'postgresSkuName=Standard_B1ms',
+  'postgresSkuTier=Burstable',
+  'postgresStorageSizeGb=32',
+  'postgresBackupRetentionDays=7',
+  'postgresHighAvailabilityMode=Disabled',
+  'apiMinReplicas=1',
+  'apiMaxReplicas=1',
+  'workerMinReplicas=1',
+  'workerMaxReplicas=1',
+  '--mode', 'Incremental',
+  '--only-show-errors'
+)
+
+./infra/azure/prepare-servicebus-maintenance.ps1 `
+  -ResourceGroup $resourceGroup `
+  -EnvironmentName staging
+
+$foundationDeploymentName = 'caseledger-staging-foundation'
+az @deploymentArguments --name $foundationDeploymentName --parameters deploymentPhase=foundation
+if ($LASTEXITCODE -ne 0) {
+  throw "Azure foundation deployment '$foundationDeploymentName' failed."
+}
+$foundationOutputs = az deployment group show `
+  --resource-group $resourceGroup `
+  --name $foundationDeploymentName `
+  --query properties.outputs `
+  --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not read outputs for '$foundationDeploymentName'."
+}
+$routingDeploymentName = 'caseledger-staging-routing'
 az deployment group create `
-  --name 'caseledger-staging' `
-  --resource-group 'caseledger-staging' `
-  --template-file './infra/azure/main.bicep' `
-  --parameters './infra/azure/main.bicepparam' `
-  --parameters environmentName=staging `
-               postgresSkuName=Standard_B1ms `
-               postgresSkuTier=Burstable `
-               postgresStorageSizeGb=32 `
-               postgresBackupRetentionDays=7 `
-               postgresHighAvailabilityMode=Disabled `
-               apiMinReplicas=1 `
-               apiMaxReplicas=1 `
-               workerMinReplicas=1 `
-               workerMaxReplicas=1
+  --resource-group $resourceGroup `
+  --name $routingDeploymentName `
+  --template-file ./infra/azure/servicebus-routing.bicep `
+  --parameters `
+    "serviceBusNamespaceName=$($foundationOutputs.serviceBusNamespaceName.value)" `
+    "apiIdentityName=$($foundationOutputs.apiIdentityName.value)" `
+    "workerIdentityName=$($foundationOutputs.workerIdentityName.value)" `
+  --mode Incremental `
+  --only-show-errors `
+  --output none
+if ($LASTEXITCODE -ne 0) {
+  throw "Azure routing deployment '$routingDeploymentName' failed."
+}
+./infra/azure/enforce-servicebus-rules.ps1 `
+  -ResourceGroup $resourceGroup `
+  -DeploymentName $routingDeploymentName
+
+$applicationDeploymentName = 'caseledger-staging'
+az @deploymentArguments --name $applicationDeploymentName --parameters deploymentPhase=application
+if ($LASTEXITCODE -ne 0) {
+  throw "Azure application deployment '$applicationDeploymentName' failed."
+}
+./infra/azure/enforce-servicebus-rules.ps1 `
+  -ResourceGroup $resourceGroup `
+  -DeploymentName $applicationDeploymentName `
+  -VerifyOnly
+az deployment group show `
+  --resource-group $resourceGroup `
+  --name $applicationDeploymentName `
+  --output json | Set-Content application-deployment.json
+./infra/azure/verify-container-app-revisions.ps1 `
+  -ResourceGroup $resourceGroup `
+  -DeploymentFile application-deployment.json `
+  -ExpectedDeploymentRevision $deploymentRevision
 ```
 
 For a private local-login deployment, choose `Demo`, set both seed-password variables to distinct
@@ -141,17 +210,102 @@ $env:CASELEDGER_SEED_ANALYST_PASSWORD = '<different-strong-generated-password>'
 For a freshly published revision, pass immutable images on the deployment command or place non-secret overrides in a separate, untracked `.bicepparam` file:
 
 ```powershell
+$resourceGroup = '<resource-group-name>'
+$deploymentRevision = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString()
+$deploymentArguments = @(
+  'deployment', 'group', 'create',
+  '--resource-group', $resourceGroup,
+  '--template-file', './infra/azure/main.bicep',
+  '--parameters', './infra/azure/main.bicepparam',
+  '--parameters',
+  'environmentName=prod',
+  "deploymentRevision=$deploymentRevision",
+  'apiImage=ghcr.io/marvelousjade/caseledger@sha256:<digest>',
+  'workerImage=ghcr.io/marvelousjade/caseledger-audit-worker@sha256:<digest>',
+  '--mode', 'Incremental',
+  '--only-show-errors'
+)
+
+./infra/azure/prepare-servicebus-maintenance.ps1 `
+  -ResourceGroup $resourceGroup `
+  -EnvironmentName prod
+
+$foundationDeploymentName = 'caseledger-prod-foundation'
+az @deploymentArguments --name $foundationDeploymentName --parameters deploymentPhase=foundation
+if ($LASTEXITCODE -ne 0) {
+  throw "Azure foundation deployment '$foundationDeploymentName' failed."
+}
+$foundationOutputs = az deployment group show `
+  --resource-group $resourceGroup `
+  --name $foundationDeploymentName `
+  --query properties.outputs `
+  --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+  throw "Could not read outputs for '$foundationDeploymentName'."
+}
+$routingDeploymentName = 'caseledger-prod-routing'
 az deployment group create `
-  --name 'caseledger-prod' `
-  --resource-group '<resource-group-name>' `
-  --template-file './infra/azure/main.bicep' `
-  --parameters './infra/azure/main.bicepparam' `
-  --parameters apiImage='ghcr.io/marvelousjade/caseledger@sha256:<digest>' `
-               workerImage='ghcr.io/marvelousjade/caseledger-audit-worker@sha256:<digest>'
+  --resource-group $resourceGroup `
+  --name $routingDeploymentName `
+  --template-file ./infra/azure/servicebus-routing.bicep `
+  --parameters `
+    "serviceBusNamespaceName=$($foundationOutputs.serviceBusNamespaceName.value)" `
+    "apiIdentityName=$($foundationOutputs.apiIdentityName.value)" `
+    "workerIdentityName=$($foundationOutputs.workerIdentityName.value)" `
+  --mode Incremental `
+  --only-show-errors `
+  --output none
+if ($LASTEXITCODE -ne 0) {
+  throw "Azure routing deployment '$routingDeploymentName' failed."
+}
+./infra/azure/enforce-servicebus-rules.ps1 `
+  -ResourceGroup $resourceGroup `
+  -DeploymentName $routingDeploymentName
+
+$applicationDeploymentName = 'caseledger-prod'
+az @deploymentArguments --name $applicationDeploymentName --parameters deploymentPhase=application
+if ($LASTEXITCODE -ne 0) {
+  throw "Azure application deployment '$applicationDeploymentName' failed."
+}
+./infra/azure/enforce-servicebus-rules.ps1 `
+  -ResourceGroup $resourceGroup `
+  -DeploymentName $applicationDeploymentName `
+  -VerifyOnly
+az deployment group show `
+  --resource-group $resourceGroup `
+  --name $applicationDeploymentName `
+  --output json | Set-Content application-deployment.json
+./infra/azure/verify-container-app-revisions.ps1 `
+  -ResourceGroup $resourceGroup `
+  -DeploymentFile application-deployment.json `
+  -ExpectedDeploymentRevision $deploymentRevision
 ```
 
-The deployment outputs the API URL, Entra redirect URI, resource names, topic/subscription names,
+The application-phase deployment outputs the API URL, Entra redirect URI, resource names, topic/subscription names,
 identity client IDs, and Blob endpoint. It never outputs credentials.
+
+Azure creates a match-all `$Default` rule when it creates a topic subscription, so deployments are
+deliberately staged. The `foundation` phase omits both application resources and does not own the
+topic or subscriptions. After the full ARM deployment succeeds, the narrow
+`servicebus-routing.bicep` deployment creates or updates those entities as `Disabled` before its child
+rules, preserving a prior fail-closed state on retries. `enforce-servicebus-rules.ps1` then removes
+every unexpected rule, validates the complete correlation filters, activates both subscriptions, and
+enables publishing last. Only then may the `application` phase create new API and worker revisions; a final read-only
+enforcer pass confirms the invariant without suspending healthy consumers. The GitHub workflow performs this sequence automatically, and direct
+deployments must use the same sequence.
+
+Before the foundation phase, `prepare-servicebus-maintenance.ps1` upgrades and verifies an existing API
+at 100 durable request-outbox publish attempts; a fresh deployment safely skips this step because no
+publisher exists. This protects the first upgrade while the existing image still uses a finite
+transport budget. The deployed image additionally keeps retryable broker outages pending instead of
+terminally dead-lettering them; non-retryable payload and programming failures retain the bounded
+25-attempt policy. Each supported application phase also passes a unique `deploymentRevision`, forcing
+a fresh worker revision after routing maintenance even when the image digest is unchanged. The phase
+default is `foundation`, so a one-shot direct deployment cannot accidentally start publishers before
+routing is exact. `verify-container-app-revisions.ps1` then requires the API and worker to expose that
+rollout marker on one active, healthy, latest-ready revision each. The worker readiness endpoint and
+the API `/health/messaging` deployment gate become healthy only after non-destructive Service Bus
+receive and send-link probes succeed.
 
 ## GitHub environment configuration
 

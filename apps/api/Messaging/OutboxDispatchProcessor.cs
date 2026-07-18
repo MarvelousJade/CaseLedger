@@ -20,9 +20,11 @@ public interface IOutboxTransport
 public sealed class OutboxTransportException(
     string errorCode,
     string message,
-    Exception? innerException = null) : Exception(message, innerException)
+    Exception? innerException = null,
+    bool retryable = false) : Exception(message, innerException)
 {
     public string ErrorCode { get; } = errorCode;
+    public bool Retryable { get; } = retryable;
 }
 
 public sealed class OutboxDispatchProcessor(
@@ -123,7 +125,9 @@ public sealed class OutboxDispatchProcessor(
         var now = UtcNow();
         var attemptCount = message.AttemptCount + 1;
         var maxAttempts = Math.Clamp(options.Value.MaxAttempts, 1, 100);
-        var deadLettered = attemptCount >= maxAttempts;
+        var retryableTransportFailure =
+            exception is OutboxTransportException { Retryable: true };
+        var deadLettered = !retryableTransportFailure && attemptCount >= maxAttempts;
         var nextAttemptAt = deadLettered
             ? message.NextAttemptAt
             : now.AddSeconds(Math.Min(300, Math.Pow(2, Math.Min(attemptCount, 8))));
