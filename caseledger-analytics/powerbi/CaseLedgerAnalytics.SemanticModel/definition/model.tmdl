@@ -9,11 +9,11 @@ model Model
 
 	queryGroup 'Reporting Marts'
 
-	expression SqlServerHost = "\"clanalytics-dev-i6uwuodhrksjg.database.windows.net\"" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	expression SqlServerHost = "clanalytics-dev-i6uwuodhrksjg.database.windows.net" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
 
 		annotation PBI_NavigationStepName = Navigation
 
-	expression SqlServerDatabase = "\"CaseLedgerAnalytics\"" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
+	expression SqlServerDatabase = "CaseLedgerAnalytics" meta [IsParameterQuery=true, Type="Text", IsParameterQueryRequired=true]
 
 		annotation PBI_NavigationStepName = Navigation
 

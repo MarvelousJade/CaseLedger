@@ -17,6 +17,13 @@ PBIR is schema-versioned preview functionality, so Desktop remains the final
 validator/author for visual-container metadata. Fully restart Desktop after
 external PBIR edits because an already open session does not reload them.
 
+Validate the PBIR JSON structure and deserialize the complete TMDL model with
+the parser installed by Power BI Desktop:
+
+```powershell
+.\tools\validate_powerbi.ps1
+```
+
 This repository deliberately does not claim that Power BI Desktop was run in
 CI. The machine-readable semantic model, DAX, page definitions, screenshot
 previews, and PDF export are independently versioned and reviewable.
