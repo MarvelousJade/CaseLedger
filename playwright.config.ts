@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const appPort = process.env.CASELEDGER_E2E_APP_PORT ?? '5151'
+
 export default defineConfig({
   testDir: './tests/e2e',
   testMatch: '**/*.spec.ts',
@@ -16,7 +18,7 @@ export default defineConfig({
   globalSetup: './tests/e2e/global-setup.ts',
   globalTeardown: './tests/e2e/global-teardown.ts',
   use: {
-    baseURL: 'http://127.0.0.1:5151',
+    baseURL: `http://127.0.0.1:${appPort}`,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',

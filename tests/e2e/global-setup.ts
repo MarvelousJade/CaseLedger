@@ -1,7 +1,8 @@
 import { setTimeout as delay } from 'node:timers/promises'
 import { runCompose, stopE2eStack } from './support/compose'
 
-const healthUrl = 'http://127.0.0.1:5151/health'
+const appPort = process.env.CASELEDGER_E2E_APP_PORT ?? '5151'
+const healthUrl = `http://127.0.0.1:${appPort}/health`
 
 async function waitForApplication() {
   const deadline = Date.now() + 90_000

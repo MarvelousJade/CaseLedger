@@ -19,6 +19,7 @@ The free Render service may take about a minute to wake after inactivity. The ho
 
 - React 19 and TypeScript 6 with responsive, accessible workflow states
 - ASP.NET Core 10 minimal APIs with cookie authentication and role authorization
+- Identity-bound anti-forgery tokens on every browser mutation, including login and GraphQL
 - REST for case commands and GraphQL for dashboard aggregation
 - EF Core with zero-configuration SQLite locally and PostgreSQL migrations for hosted deployments
 - Page-based case queries and strong ETag optimistic concurrency for updates
@@ -29,6 +30,7 @@ The free Render service may take about a minute to wake after inactivity. The ho
 - RabbitMQ locally or an Azure Service Bus provider for hosted asynchronous verification
 - A TypeScript worker with a durable PostgreSQL inbox and result outbox
 - At-least-once delivery with idempotency checks, retry tiers, and dead-letter handling
+- Administrator-only, redacted failure inspection and guarded outbox/webhook replay with a durable operator audit
 - SignalR verification updates with a two-second polling fallback
 - Signed, retryable outbound verification webhooks with a privacy-minimal payload
 - An independent, dependency-free Node.js 24 audit-verifier library and CLI
@@ -57,6 +59,10 @@ Open `http://localhost:5173`. The API listens on `http://localhost:5150`; its Sw
 `http://localhost:5150/swagger/v1/swagger.json`. The first run creates and seeds a local SQLite
 database automatically. This lightweight development mode leaves messaging and webhooks disabled;
 clicking **Verify now** falls back to in-process verification when the queue endpoint returns `503`.
+SQLite is intentionally disposable development storage. If an existing `caseledger.db` uses an
+older schema, startup stops with a compatibility error instead of running against missing tables or
+columns. Back up anything you need, rename or delete that file, and restart to create and seed the
+current schema; use PostgreSQL when data must survive in-place schema upgrades.
 
 | Role | Email | Password | Access |
 | --- | --- | --- | --- |
@@ -138,6 +144,7 @@ See [architecture.md](docs/architecture.md) for the data model, trust boundary, 
 
 | Method | Route | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/auth/antiforgery` | Issue an identity-bound request token for browser mutations |
 | `GET` | `/api/auth/capabilities` | Report enabled sign-in methods and whether public demo credentials may be shown |
 | `POST` | `/api/auth/login` | Create an HTTP-only cookie session |
 | `GET` | `/api/auth/entra/login` | Begin optional Microsoft Entra OIDC sign-in |
@@ -154,6 +161,9 @@ See [architecture.md](docs/architecture.md) for the data model, trust boundary, 
 | `GET` | `/api/cases/{id}/audit/verifications/latest` | Read the latest queued or terminal job |
 | `GET` | `/api/cases/{id}/audit/verifications/{jobId}` | Read one verification job |
 | `GET` | `/api/cases/{id}/audit/export` | Export a chain; administrators only |
+| `GET` | `/api/admin/operations/failures` | List redacted delivery failures; administrators only |
+| `POST` | `/api/admin/operations/verification-requests/{id}/replay` | Guardedly reactivate one API request-outbox failure |
+| `POST` | `/api/admin/operations/webhooks/{id}/replay` | Guardedly reactivate one webhook-outbox failure |
 | SignalR | `/hubs/cases` | Authenticated case-verification updates |
 | `POST` | `/graphql` | Query dashboard aggregates |
 | `GET` | `/health` | Anonymous health probe |
@@ -273,11 +283,15 @@ The production-oriented Azure package lives in [`infra/azure`](infra/azure). It 
 PostgreSQL networking, Container Apps for the API and worker, Service Bus, private Blob containers,
 Key Vault, persistent Data Protection keys, and separate user-assigned managed identities. The
 manual GitHub workflow authenticates to Azure with OIDC, supports a `what-if` plan, and deploys
-immutable commit-tagged images from the protected `azure-production` environment. It requires an
-operator-owned Azure subscription, protected environment values, and a cost review; it has not been
-run against a production subscription. Every deployment must explicitly select `Entra`, `Demo`, or
-`DemoAndEntra`; the Entra path supports a one-time immutable administrator object-ID mapping so a
-fresh database is usable without granting access to every identity in the tenant.
+commit-tagged images only after proving that both are anonymously pullable. Protected
+`azure-dev`, `azure-staging`, and `azure-production` environments keep their OIDC trust and secrets
+separate; non-production deployments use a Burstable B1ms database with one API and one worker
+replica during durability rehearsals.
+The package requires an operator-owned Azure subscription, protected environment values, and a cost
+review; it has not been run against a production subscription. Every deployment must explicitly
+select `Entra`, `Demo`, or `DemoAndEntra`; the Entra path supports a one-time immutable administrator
+object-ID mapping so a fresh database is usable without granting access to every identity in the
+tenant.
 
 ## Repository layout
 
@@ -306,9 +320,10 @@ render.yaml             Render Blueprint configuration
 - Uploaded evidence bytes are retained under generated case/evidence object keys and hashed by the API. There is no download endpoint, malware scanning, retention policy, or legal-hold workflow yet. The seeded sample evidence remains metadata-only.
 - Local and Compose evidence objects use filesystem storage. The Render demo has no persistent object volume, so an instance replacement can leave database metadata without its uploaded bytes; Azure Blob is the intended durable hosted provider.
 - A hash chain is tamper-evident, not an external trust anchor. A database administrator who can rewrite the entire chain could recompute it; production hardening would periodically publish signed chain heads to separate storage.
-- SQLite uses `EnsureCreated` for zero-configuration local development; hosted PostgreSQL uses checked-in EF Core migrations.
-- Seeded cookie authentication keeps local and Render demonstrations immediately testable. Production demo login defaults off; optional Entra OIDC maps only a configured tenant and immutable object ID, without email-based account linking. Cookie principals are checked against current user status and role on every request. Anti-forgery hardening and administrator-managed identity lifecycle remain future work.
-- Broker and webhook delivery are at least once. Consumers use stable idempotency identifiers; an operator must monitor and replay dead-lettered work intentionally.
+- SQLite uses `EnsureCreated` plus a fail-fast schema compatibility check for disposable local
+  development; it is not migrated in place. Hosted PostgreSQL uses checked-in EF Core migrations.
+- Seeded cookie authentication keeps local and Render demonstrations immediately testable. Production demo login defaults off; optional Entra OIDC maps only a configured tenant and immutable object ID, without email-based account linking. Cookie principals are checked against current user status and role on every request, and unsafe browser requests require an identity-bound anti-forgery token. Administrator-managed identity lifecycle remains future work.
+- Broker and webhook delivery are at least once. Consumers use stable idempotency identifiers. Administrators can inspect and guard-replay API-owned request/webhook failures; broker-native dead-letter queues still require deliberate provider tooling and must not be blindly replayed.
 - The Azure deployment package is validated infrastructure-as-code, not a claim that an Azure environment has been provisioned or paid for.
 - Local telemetry deliberately records bounded operational attributes, identifiers, counts, and timings—not filenames, email addresses, request secrets, credentials, or uploaded content.
 

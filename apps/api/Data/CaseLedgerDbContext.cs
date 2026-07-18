@@ -14,6 +14,7 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
     public DbSet<AuditVerificationJob> AuditVerificationJobs => Set<AuditVerificationJob>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
     public DbSet<WebhookDelivery> WebhookDeliveries => Set<WebhookDelivery>();
+    public DbSet<OperationalReplay> OperationalReplays => Set<OperationalReplay>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -158,6 +159,24 @@ public sealed class CaseLedgerDbContext(DbContextOptions<CaseLedgerDbContext> op
             .WithMany()
             .HasForeignKey(item => item.VerificationJobId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        var operationalReplay = modelBuilder.Entity<OperationalReplay>();
+        operationalReplay.ToTable("OperationalReplays");
+        operationalReplay.HasKey(item => item.Id);
+        operationalReplay.Property(item => item.Kind)
+            .HasConversion<string>()
+            .HasMaxLength(40)
+            .IsRequired();
+        operationalReplay.Property(item => item.PreviousErrorCode).HasMaxLength(80);
+        operationalReplay.Property(item => item.Reason).HasMaxLength(240).IsRequired();
+        operationalReplay.HasIndex(
+                item => new { item.Kind, item.SourceId, item.SourceDeadLetteredAt })
+            .IsUnique();
+        operationalReplay.HasIndex(item => item.ReplayedAt);
+        operationalReplay.HasOne(item => item.Actor)
+            .WithMany()
+            .HasForeignKey(item => item.ActorId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)

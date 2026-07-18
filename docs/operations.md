@@ -43,7 +43,15 @@ Endpoints:
 
 This mode uses SQLite. Messaging and webhooks are disabled by default, so the queue endpoint returns
 `503` and the React client falls back to synchronous audit verification. Swagger uses the same
-cookie session as the client; call the login endpoint before protected routes.
+cookie session as the client. Its request interceptor obtains an antiforgery token automatically,
+so use the login operation before calling protected routes.
+
+SQLite files are disposable development storage and are not migrated in place. At startup,
+CaseLedger compares the existing tables and columns with the current model and stops before seeding
+if the file is stale. Back up any records you need, stop the API, rename or delete
+`caseledger.db` in the API process working directory (or the file selected by
+`ConnectionStrings__CaseLedger`), and restart to create the current schema. Use the PostgreSQL path
+for environments that require data-preserving schema upgrades.
 
 Evidence uploads are hashed by the API and stored under `apps/api/App_Data/evidence` by default.
 The directory is ignored by Git. Removing it deletes local evidence objects but not database rows.
@@ -113,7 +121,29 @@ UTF-8 request body, then deduplicate using `X-CaseLedger-Delivery` or `Idempoten
 marks the row delivered. Network failures, timeouts, 408, 429, and 5xx responses retry; other 4xx
 responses and exhausted attempts move the database delivery row to its terminal dead-letter state.
 
-## Azure production package
+### Failure inspection and guarded replay
+
+An authenticated `Admin` can open **Operations** or call
+`GET /api/admin/operations/failures` to inspect redacted API request-outbox, terminal verification,
+and webhook failures. Responses contain operational IDs, case references, timestamps, attempt
+counts, and sanitized error codes; they never contain payload JSON, canonical data, webhook bodies,
+destinations, lock IDs, or secrets.
+
+Eligible request and webhook rows can be replayed from the UI or their administrator-only replay
+endpoints. Each command must echo the displayed `deadLetteredAt` value and include a 3–240 character
+reason. The server rejects stale views, active leases, disabled runtimes, already terminal work, and
+conflicting delivered/published state. An accepted replay retains the original idempotency ID and
+payload, resets the retry schedule, and writes an `OperationalReplay` audit row with the actor and
+previous attempt/error state. A lost publish or response can still mean the external side effect
+already happened, so downstream message and webhook consumers must deduplicate the stable ID.
+
+Terminal verification jobs are immutable: queue a new verification rather than resetting the old
+job. The Operations API also does not settle or republish broker-native DLQs. Inspect RabbitMQ's
+`caseledger.audit.verify.dead.v1` and `caseledger.api.audit-verification-results.dead.v1`, or the
+corresponding Azure Service Bus subscription DLQs, with provider tooling. Validate the failure and
+message identity before settling it; malformed or conflicting messages must not be blindly replayed.
+
+## Azure deployment package
 
 The `infra/azure` package defines a production-oriented foundation, but it has not been provisioned.
 Review expected Azure charges and sign in to the intended subscription before running a deployment.
@@ -125,14 +155,32 @@ Validate the Bicep locally without creating resources:
 
 ```powershell
 ./infra/azure/validate.ps1
+./infra/azure/validate.ps1 -ResourceGroup caseledger-staging -EnvironmentName staging
 ```
 
-For GitHub deployment, run `infra/azure/bootstrap-github-oidc.ps1` only after signing in to Azure.
-It prepares workload identity federation for the protected `azure-production` environment. Store
-the printed Azure identifiers and required passwords as protected environment secrets; never add
-them to tracked parameter files. The manual `Deploy Azure production` workflow accepts a
-`plan` operation for `what-if` or an explicit `deploy` operation and uses immutable commit-tagged
-GHCR images. See [`infra/azure/README.md`](../infra/azure/README.md) for prerequisites and commands.
+For the first rehearsal, use resource group `caseledger-staging`, region `canadacentral`, logical
+environment `staging`, and protected GitHub environment `azure-staging`. Run the bootstrap only
+after signing in to the intended Azure subscription:
+
+```powershell
+./infra/azure/bootstrap-github-oidc.ps1 -GitHubEnvironment azure-staging
+```
+
+The environment selection defaults the identity to `caseledger-github-staging-deploy` and scopes it
+to `caseledger-staging`. Store the printed Azure identifiers and required passwords only in the
+matching protected environment, and set its `AZURE_RESOURCE_GROUP` variable to the bootstrap group.
+Production continues to use `azure-production`, `caseledger-prod`,
+and `caseledger-github-deploy`; development uses the corresponding `azure-dev` values. The manual
+`Deploy Azure environment` workflow selects the protected environment from the logical environment,
+accepts a `plan` operation for `what-if` or an explicit `deploy` operation, checks that both GHCR
+images are anonymously pullable, and smoke-checks `/health` after deployment. See
+[`infra/azure/README.md`](../infra/azure/README.md) for prerequisites and commands.
+
+Staging and development deploy PostgreSQL Burstable `Standard_B1ms`, 32 GiB storage, seven-day
+backup retention, disabled HA, one API replica, and one worker replica. Production retains the
+General Purpose database and replica defaults. Both processes remain at one during the rehearsal so
+their database-backed dispatchers and consumers can make progress; reduce them only after the test,
+with the checked-in worker Service Bus scaler still configured.
 
 ### Service Bus topology and identity
 
@@ -198,6 +246,37 @@ for linking. Tenant-wide `AutoProvisionAnalyst` is available only as a deliberat
 should normally remain disabled. Demo modes require both seeded passwords; credential hints remain
 off unless the environment is intentionally public. Never reuse the public Render credentials.
 
+Do not confuse the two client IDs. `AZURE_CLIENT_ID` is the user-assigned deployment identity trusted
+by the GitHub environment's OIDC subject. `CASELEDGER_ENTRA_CLIENT_ID` is the separate single-tenant
+application registration used for browser sign-in. Create that app registration before deployment,
+then register the emitted HTTPS `/signin-oidc` callback before the Entra smoke test. Prefer Entra-only
+authentication with `CASELEDGER_ENTRA_AUTO_PROVISION_ANALYST=false` and an exact bootstrap
+administrator object ID for staging.
+
+### Staging rehearsal and cost shutdown
+
+Inspect `what-if` before deploying and reject unexpected Premium Service Bus, PostgreSQL HA, or
+General Purpose database resources. Free-account PostgreSQL allowances are offer-dependent; Service
+Bus Standard, Log Analytics, storage, Key Vault, and Container Apps can still consume free credit.
+Set a resource-group budget and alerts before deployment.
+
+After deployment, verify Entra login and `/api/auth/me`, create a case, upload evidence, and queue an
+asynchronous audit verification through completion. That path exercises PostgreSQL, Blob storage,
+both managed identities, both filtered Service Bus subscriptions, and the worker result outbox.
+Preserve a session cookie across an API revision restart to verify the Blob/Key Vault Data Protection
+key ring, inspect both dead-letter subscriptions, and rehearse redeploying the previous image digest.
+
+When testing is complete, reduce both Container Apps minimum replica counts to zero, then stop or
+delete PostgreSQL. Stopping removes compute charges but retains storage charges, and Flexible Server
+automatically starts again after seven days. Delete the staging resource group when it is no longer
+needed. Because the vault has 90-day purge protection, a deleted vault name cannot immediately be
+reused; recover it for an iterative rehearsal or deploy with a different naming prefix.
+
+Scale the API back to one before resuming a durability rehearsal: its database outbox and Service
+Bus result consumer are background services, while its current Azure scaler observes HTTP traffic
+only. If the staging group was deleted, rerun the OIDC bootstrap; the group-scoped deployment
+identity cannot recreate the resource group that contained it.
+
 ## Docker-backed E2E workflows
 
 Install Chromium once, then run:
@@ -212,6 +291,12 @@ Global setup recreates the isolated `caseledger-e2e` project and waits for the a
 `http://127.0.0.1:5151`. The E2E RabbitMQ listener is bound to `127.0.0.1:5673`, and the signed
 webhook receiver is at `http://127.0.0.1:5154`. Global teardown removes containers and disposable
 volumes.
+
+If Windows or another local service reserves those host ports, set
+`CASELEDGER_E2E_APP_PORT`, `CASELEDGER_E2E_RABBITMQ_PORT`,
+`CASELEDGER_E2E_RABBITMQ_MANAGEMENT_PORT`, and `CASELEDGER_E2E_WEBHOOK_PORT` before running the
+suite. Compose, health checks, browser requests, and broker/webhook helpers use the overrides
+consistently.
 
 The suite covers login, case creation, server-side evidence hashing and persistence, distributed audit verification, a direct
 PostgreSQL audit-row change, duplicate API-request and worker-result publication, idempotent result

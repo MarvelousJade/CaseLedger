@@ -1,8 +1,10 @@
 import { connect, type ChannelModel, type ConfirmChannel } from 'amqplib'
 import { setTimeout as delay } from 'node:timers/promises'
 
-const brokerUrl = 'amqp://caseledger:caseledger-e2e@127.0.0.1:5673/'
-const managementUrl = 'http://127.0.0.1:15673'
+const brokerPort = process.env.CASELEDGER_E2E_RABBITMQ_PORT ?? '5673'
+const managementPort = process.env.CASELEDGER_E2E_RABBITMQ_MANAGEMENT_PORT ?? '15673'
+const brokerUrl = `amqp://caseledger:caseledger-e2e@127.0.0.1:${brokerPort}/`
+const managementUrl = `http://127.0.0.1:${managementPort}`
 const managementAuthorization = `Basic ${Buffer.from('caseledger:caseledger-e2e').toString('base64')}`
 const auditExchange = 'caseledger.audit'
 const requestRoutingKey = 'audit.verification.requested.v1'

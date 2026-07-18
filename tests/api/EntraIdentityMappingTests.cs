@@ -167,6 +167,7 @@ public sealed class EntraIdentityMappingTests
                 item.ObjectId == ObjectId));
 
         using var client = factory.CreateCookieClient();
+        await client.RefreshAntiforgeryTokenAsync();
         var login = await client.PostAsJsonAsync(
             "/api/auth/login",
             new LoginRequest(user.Email, "not-an-external-password"));
@@ -268,6 +269,7 @@ public sealed class EntraIdentityMappingTests
 
         var capabilities = await client.GetFromJsonAsync<AuthCapabilitiesResponse>(
             "/api/auth/capabilities");
+        await client.RefreshAntiforgeryTokenAsync();
         var login = await client.PostAsJsonAsync(
             "/api/auth/login",
             new LoginRequest("analyst@caseledger.dev", "Analyst123!"));
@@ -292,6 +294,7 @@ public sealed class EntraIdentityMappingTests
     {
         using var factory = new CaseLedgerFactory();
         using var client = factory.CreateCookieClient();
+        await client.RefreshAntiforgeryTokenAsync();
         var login = await client.PostAsJsonAsync(
             "/api/auth/login",
             new LoginRequest("analyst@caseledger.dev", "Analyst123!"));

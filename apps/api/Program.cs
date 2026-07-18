@@ -12,6 +12,7 @@ using CaseLedger.Api.Security;
 using CaseLedger.Api.Services;
 using CaseLedger.Api.Webhooks;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -35,6 +36,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
     options.OperationFilter<EvidenceUploadOperationFilter>();
+    options.OperationFilter<AntiforgeryOperationFilter>();
     options.SwaggerDoc("v1", new OpenApiInfo
     {
         Title = "CaseLedger API",
@@ -176,6 +178,17 @@ builder.Services.AddRateLimiter(options =>
 var requireSecureCookies = builder.Configuration.GetValue(
     "Security:RequireSecureCookies",
     builder.Environment.IsProduction());
+builder.Services.AddAntiforgery(options =>
+{
+    options.HeaderName = "X-CSRF-TOKEN";
+    options.Cookie.Name = "CaseLedger.Antiforgery";
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.SameSite = SameSiteMode.Strict;
+    options.Cookie.SecurePolicy = requireSecureCookies
+        ? CookieSecurePolicy.Always
+        : CookieSecurePolicy.SameAsRequest;
+});
 builder.Services
     .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
@@ -217,6 +230,29 @@ app.UseSwaggerUI(options =>
 {
     options.DocumentTitle = "CaseLedger API documentation";
     options.SwaggerEndpoint("/swagger/v1/swagger.json", "CaseLedger API v1");
+    options.UseRequestInterceptor(
+        """
+        async (request) => {
+          const method = (request.method || 'GET').toUpperCase();
+          if (!['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)) {
+            const response = await fetch('/api/auth/antiforgery', {
+              method: 'GET',
+              credentials: 'include',
+              cache: 'no-store',
+              headers: { 'Accept': 'application/json' }
+            });
+            if (!response.ok) {
+              throw new Error('Unable to obtain an antiforgery token.');
+            }
+            const payload = await response.json();
+            if (!payload.token) {
+              throw new Error('The antiforgery response did not contain a token.');
+            }
+            request.headers['X-CSRF-TOKEN'] = payload.token;
+          }
+          return request;
+        }
+        """);
 });
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -224,6 +260,25 @@ app.UseCors();
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
+app.UseAntiforgery();
+app.Use(async (context, next) =>
+{
+    var validation = context.Features.Get<IAntiforgeryValidationFeature>();
+    if (validation is { IsValid: false })
+    {
+        await Results.Problem(
+            statusCode: StatusCodes.Status400BadRequest,
+            title: "Invalid request security token",
+            detail: "A valid antiforgery token is required for this request.",
+            extensions: new Dictionary<string, object?>
+            {
+                ["traceId"] = context.TraceIdentifier
+            }).ExecuteAsync(context);
+        return;
+    }
+
+    await next(context);
+});
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }))
     .AllowAnonymous()
@@ -237,6 +292,7 @@ app.MapHub<CaseUpdatesHub>("/hubs/cases")
 app.MapGraphQL("/graphql")
     .RequireAuthorization()
     .RequireRateLimiting("authenticated")
+    .WithMetadata(new RequireAntiforgeryTokenAttribute(true))
     .ExcludeFromDescription();
 app.MapFallbackToFile("index.html");
 
@@ -250,6 +306,8 @@ await using (var scope = app.Services.CreateAsyncScope())
     else
     {
         await db.Database.EnsureCreatedAsync();
+        // EnsureCreated never evolves an existing file; reject stale schemas before seeding.
+        await SqliteSchemaCompatibility.EnsureCurrentAsync(db);
     }
     var seeder = scope.ServiceProvider.GetRequiredService<DatabaseSeeder>();
     await seeder.SeedAsync();

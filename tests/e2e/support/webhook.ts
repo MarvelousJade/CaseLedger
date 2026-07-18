@@ -1,4 +1,6 @@
-const receiverUrl = process.env.WEBHOOK_RECEIVER_URL ?? 'http://127.0.0.1:5154'
+const webhookPort = process.env.CASELEDGER_E2E_WEBHOOK_PORT ?? '5154'
+const receiverUrl =
+  process.env.WEBHOOK_RECEIVER_URL ?? `http://127.0.0.1:${webhookPort}`
 
 interface WebhookDeliveryMetadata {
   deliveryId: string
