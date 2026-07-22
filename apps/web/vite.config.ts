@@ -1,6 +1,8 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 
+const apiTarget = process.env.VITE_API_URL ?? 'http://localhost:5150'
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react()],
@@ -13,15 +15,15 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:5150',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/graphql': {
-        target: 'http://localhost:5150',
+        target: apiTarget,
         changeOrigin: true,
       },
       '/hubs': {
-        target: 'http://localhost:5150',
+        target: apiTarget,
         changeOrigin: true,
         ws: true,
       },
