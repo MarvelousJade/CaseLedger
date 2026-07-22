@@ -6,7 +6,17 @@ public sealed class CaseLedgerAuthenticationOptions
 
     public bool DemoLoginEnabled { get; init; }
     public bool ShowDemoCredentials { get; init; }
+    public JwtAuthenticationOptions Jwt { get; init; } = new();
     public EntraAuthenticationOptions Entra { get; init; } = new();
+}
+
+public sealed class JwtAuthenticationOptions
+{
+    public bool Enabled { get; init; }
+    public string Issuer { get; init; } = "CaseLedger.Api";
+    public string Audience { get; init; } = "CaseLedger.GraphQL";
+    public string? SigningKey { get; init; }
+    public int AccessTokenMinutes { get; init; } = 15;
 }
 
 public sealed class EntraAuthenticationOptions
@@ -28,6 +38,18 @@ public static class AuthenticationRuntimeOptions
         {
             throw new InvalidOperationException(
                 "Authentication:ShowDemoCredentials requires demo login to be enabled.");
+        }
+
+        if (options.Jwt.Enabled &&
+            (string.IsNullOrWhiteSpace(options.Jwt.Issuer) ||
+             string.IsNullOrWhiteSpace(options.Jwt.Audience) ||
+             options.Jwt.SigningKey is null ||
+             options.Jwt.SigningKey.Length < 32 ||
+             options.Jwt.AccessTokenMinutes is < 1 or > 60))
+        {
+            throw new InvalidOperationException(
+                "Authentication:Jwt requires a non-empty issuer and audience, a signing key " +
+                "of at least 32 characters, and an access-token lifetime from 1 to 60 minutes.");
         }
 
         if (!options.Entra.Enabled)

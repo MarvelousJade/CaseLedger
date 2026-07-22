@@ -53,6 +53,9 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
                     demoLoginEnabled.ToString(),
                 ["Authentication:ShowDemoCredentials"] =
                     demoLoginEnabled.ToString(),
+                ["Authentication:Jwt:Enabled"] = "true",
+                ["Authentication:Jwt:SigningKey"] =
+                    "caseledger-tests-signing-key-do-not-use-outside-tests",
                 ["Messaging:Enabled"] = messagingEnabled.ToString(),
                 ["Messaging:Provider"] = messagingProvider
             };

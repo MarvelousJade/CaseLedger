@@ -40,6 +40,12 @@ public sealed class ApiContractTests
         Assert.Contains(
             listOperation.GetProperty("parameters").EnumerateArray(),
             parameter => parameter.GetProperty("name").GetString() == "pageSize");
+        Assert.Contains(
+            listOperation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() == "sortBy");
+        Assert.Contains(
+            listOperation.GetProperty("parameters").EnumerateArray(),
+            parameter => parameter.GetProperty("name").GetString() == "sortDirection");
         Assert.DoesNotContain(
             listOperation.GetProperty("parameters").EnumerateArray(),
             parameter => parameter.GetProperty("name").GetString() ==
@@ -155,6 +161,16 @@ public sealed class ApiContractTests
 
         var undefinedStatus = await client.GetAsync("/api/cases?status=999");
         Assert.Equal(HttpStatusCode.BadRequest, undefinedStatus.StatusCode);
+
+        var titleOrder = await client.GetFromJsonAsync<CaseCollectionResponse>(
+            "/api/cases?page=1&pageSize=5&sortBy=title&sortDirection=asc");
+        Assert.NotNull(titleOrder);
+        Assert.Equal(
+            ["CL-2026-005", "CL-2026-001", "CL-2026-002", "CL-2026-004", "CL-2026-003"],
+            titleOrder.Items.Select(item => item.Reference));
+
+        var invalidSort = await client.GetAsync("/api/cases?sortBy=unknown");
+        Assert.Equal(HttpStatusCode.BadRequest, invalidSort.StatusCode);
     }
 
     [Fact]

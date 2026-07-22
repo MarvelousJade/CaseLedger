@@ -177,6 +177,26 @@ public static class CaseEndpoints
             }
         }
 
+        var sortBy = request.SortBy?.Trim().ToLowerInvariant() ?? "updatedat";
+        if (sortBy is not (
+            "reference" or
+            "title" or
+            "status" or
+            "severity" or
+            "createdat" or
+            "updatedat" or
+            "dueat"))
+        {
+            errors["sortBy"] =
+                ["sortBy must be reference, title, status, severity, createdAt, updatedAt, or dueAt."];
+        }
+
+        var sortDirection = request.SortDirection?.Trim().ToLowerInvariant() ?? "desc";
+        if (sortDirection is not ("asc" or "desc"))
+        {
+            errors["sortDirection"] = ["sortDirection must be asc or desc."];
+        }
+
         var usesPageParameters = request.Page.HasValue || request.PageSize.HasValue;
         var usesLegacyParameters = request.LegacyOffset.HasValue || request.LegacyLimit.HasValue;
         if (usesPageParameters && usesLegacyParameters)
@@ -229,8 +249,32 @@ public static class CaseEndpoints
         }
 
         var total = await query.CountAsync(cancellationToken);
-        var items = await query
-            .OrderByDescending(item => item.UpdatedAt)
+        var descending = sortDirection == "desc";
+        var orderedQuery = sortBy switch
+        {
+            "reference" => descending
+                ? query.OrderByDescending(item => item.Reference)
+                : query.OrderBy(item => item.Reference),
+            "title" => descending
+                ? query.OrderByDescending(item => item.Title)
+                : query.OrderBy(item => item.Title),
+            "status" => descending
+                ? query.OrderByDescending(item => item.Status)
+                : query.OrderBy(item => item.Status),
+            "severity" => descending
+                ? query.OrderByDescending(item => item.Severity)
+                : query.OrderBy(item => item.Severity),
+            "createdat" => descending
+                ? query.OrderByDescending(item => item.CreatedAt)
+                : query.OrderBy(item => item.CreatedAt),
+            "dueat" => descending
+                ? query.OrderByDescending(item => item.DueAt)
+                : query.OrderBy(item => item.DueAt),
+            _ => descending
+                ? query.OrderByDescending(item => item.UpdatedAt)
+                : query.OrderBy(item => item.UpdatedAt)
+        };
+        var items = await orderedQuery
             .ThenBy(item => item.Reference)
             .Skip(offset)
             .Take(pageSize)

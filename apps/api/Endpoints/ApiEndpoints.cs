@@ -16,8 +16,7 @@ public static class ApiEndpoints
 {
     public static IEndpointRouteBuilder MapCaseLedgerApi(this IEndpointRouteBuilder endpoints)
     {
-        var api = endpoints.MapGroup("/api")
-            .WithMetadata(new RequireAntiforgeryTokenAttribute(true));
+        var api = endpoints.MapGroup("/api");
         var auth = api.MapGroup("/auth")
             .WithTags("Authentication");
 
@@ -56,6 +55,15 @@ public static class ApiEndpoints
             .WithSummary("Get the authenticated user")
             .Produces<UserResponse>()
             .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces(StatusCodes.Status429TooManyRequests);
+        auth.MapGet("/token", IssueAccessTokenAsync)
+            .RequireAuthorization()
+            .RequireRateLimiting("authenticated")
+            .WithName("IssueAccessToken")
+            .WithSummary("Issue a short-lived gateway access token for the current session")
+            .Produces<AccessTokenResponse>()
+            .Produces<ProblemDetails>(StatusCodes.Status401Unauthorized)
+            .Produces<ProblemDetails>(StatusCodes.Status404NotFound)
             .Produces(StatusCodes.Status429TooManyRequests);
         auth.MapPost("/logout", LogoutAsync)
             .RequireAuthorization()
@@ -211,6 +219,34 @@ public static class ApiEndpoints
                 statusCode: StatusCodes.Status401Unauthorized,
                 title: "Authentication required")
             : Results.Ok(ToResponse(user));
+    }
+
+    private static async Task<IResult> IssueAccessTokenAsync(
+        ClaimsPrincipal principal,
+        HttpResponse response,
+        CaseLedgerDbContext db,
+        JwtTokenService tokens,
+        IOptions<CaseLedgerAuthenticationOptions> options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.Value.Jwt.Enabled)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Gateway authentication is not enabled");
+        }
+
+        var user = await GetCurrentUserAsync(principal, db, cancellationToken);
+        if (user is null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status401Unauthorized,
+                title: "Authentication required");
+        }
+
+        response.Headers.CacheControl = "no-store";
+        response.Headers.Pragma = "no-cache";
+        return Results.Ok(tokens.Issue(user));
     }
 
     private static async Task<IResult> LogoutAsync(HttpContext context, ClaimsPrincipal principal)

@@ -48,6 +48,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       Authentication__DemoLoginEnabled: "true"
       Authentication__ShowDemoCredentials: "true"
+      Authentication__Jwt__Enabled: "true"
+      Authentication__Jwt__SigningKey: ${CASELEDGER_JWT_SIGNING_KEY:-caseledger-local-signing-key-change-me}
       Database__Provider: PostgreSQL
       ConnectionStrings__CaseLedger: Host=database;Port=5432;Database=caseledger;Username=caseledger;Password=${POSTGRES_PASSWORD:-caseledger-local}
       Messaging__Enabled: "true"

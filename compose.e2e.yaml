@@ -48,6 +48,8 @@ services:
       ASPNETCORE_ENVIRONMENT: Production
       Authentication__DemoLoginEnabled: "true"
       Authentication__ShowDemoCredentials: "true"
+      Authentication__Jwt__Enabled: "true"
+      Authentication__Jwt__SigningKey: caseledger-e2e-signing-key-do-not-use-outside-tests
       Database__Provider: PostgreSQL
       ConnectionStrings__CaseLedger: Host=database;Port=5432;Database=caseledger;Username=caseledger;Password=caseledger-e2e
       Messaging__Enabled: "true"

@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using System.Security.Claims;
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
 using System.Threading.RateLimiting;
 using CaseLedger.Api.Authentication;
 using CaseLedger.Api.Data;
@@ -11,12 +13,14 @@ using CaseLedger.Api.Realtime;
 using CaseLedger.Api.Security;
 using CaseLedger.Api.Services;
 using CaseLedger.Api.Webhooks;
-using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi;
+using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -190,8 +194,25 @@ builder.Services.AddAntiforgery(options =>
         : CookieSecurePolicy.SameAsRequest;
 });
 builder.Services
-    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
-    .AddCookie(options =>
+    .AddAuthentication(options =>
+    {
+        options.DefaultScheme = AuthenticationSchemes.Forwarding;
+        options.DefaultAuthenticateScheme = AuthenticationSchemes.Forwarding;
+        options.DefaultChallengeScheme = AuthenticationSchemes.Forwarding;
+    })
+    .AddPolicyScheme(
+        AuthenticationSchemes.Forwarding,
+        displayName: null,
+        options => options.ForwardDefaultSelector = context =>
+            context.RequestServices
+                .GetRequiredService<Microsoft.Extensions.Options.IOptions<
+                    CaseLedgerAuthenticationOptions>>()
+                .Value.Jwt.Enabled &&
+            context.Request.Headers.Authorization.ToString()
+                .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? AuthenticationSchemes.Bearer
+                : AuthenticationSchemes.Session)
+    .AddCookie(AuthenticationSchemes.Session, options =>
     {
         options.Cookie.Name = "CaseLedger.Session";
         options.Cookie.HttpOnly = true;
@@ -203,7 +224,52 @@ builder.Services
         options.ExpireTimeSpan = TimeSpan.FromHours(8);
         options.SlidingExpiration = true;
         options.EventsType = typeof(SessionCookieEvents);
+    })
+    .AddJwtBearer(AuthenticationSchemes.Bearer, options =>
+    {
+        var configuredAuthentication = builder.Configuration
+            .GetSection(CaseLedgerAuthenticationOptions.SectionName)
+            .Get<CaseLedgerAuthenticationOptions>() ??
+            new CaseLedgerAuthenticationOptions();
+        AuthenticationRuntimeOptions.Validate(configuredAuthentication);
+        var jwt = configuredAuthentication.Jwt;
+        var signingKey = jwt.SigningKey ??
+            "caseledger-disabled-jwt-signing-key";
+
+        options.MapInboundClaims = false;
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwt.Issuer,
+            ValidateAudience = true,
+            ValidAudience = jwt.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new SymmetricSecurityKey(
+                Encoding.UTF8.GetBytes(signingKey)),
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(30),
+            NameClaimType = JwtRegisteredClaimNames.Name,
+            RoleClaimType = "role"
+        };
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = context =>
+            {
+                var subject = context.Principal?.FindFirstValue(
+                    JwtRegisteredClaimNames.Sub);
+                if (subject is not null &&
+                    context.Principal?.Identity is ClaimsIdentity identity)
+                {
+                    identity.AddClaim(new Claim(
+                        ClaimTypes.NameIdentifier,
+                        subject));
+                }
+
+                return Task.CompletedTask;
+            }
+        };
     });
+builder.Services.AddSingleton<JwtTokenService>();
 builder.Services.AddCaseLedgerExternalAuthentication(builder.Configuration);
 builder.Services.AddAuthorization();
 
@@ -260,21 +326,34 @@ app.UseCors();
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseAuthorization();
-app.UseAntiforgery();
 app.Use(async (context, next) =>
 {
-    var validation = context.Features.Get<IAntiforgeryValidationFeature>();
-    if (validation is { IsValid: false })
+    var method = context.Request.Method;
+    var unsafeMethod = method is not ("GET" or "HEAD" or "OPTIONS" or "TRACE");
+    var browserProtectedEndpoint =
+        context.Request.Path.StartsWithSegments("/api") ||
+        context.Request.Path.Equals("/graphql", StringComparison.OrdinalIgnoreCase);
+    var bearerRequest = context.Request.Headers.Authorization.ToString()
+        .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase);
+    if (unsafeMethod && browserProtectedEndpoint && !bearerRequest)
     {
-        await Results.Problem(
-            statusCode: StatusCodes.Status400BadRequest,
-            title: "Invalid request security token",
-            detail: "A valid antiforgery token is required for this request.",
-            extensions: new Dictionary<string, object?>
-            {
-                ["traceId"] = context.TraceIdentifier
-            }).ExecuteAsync(context);
-        return;
+        try
+        {
+            var antiforgery = context.RequestServices.GetRequiredService<IAntiforgery>();
+            await antiforgery.ValidateRequestAsync(context);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            await Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Invalid request security token",
+                detail: "A valid antiforgery token is required for this request.",
+                extensions: new Dictionary<string, object?>
+                {
+                    ["traceId"] = context.TraceIdentifier
+                }).ExecuteAsync(context);
+            return;
+        }
     }
 
     await next(context);
@@ -292,7 +371,6 @@ app.MapHub<CaseUpdatesHub>("/hubs/cases")
 app.MapGraphQL("/graphql")
     .RequireAuthorization()
     .RequireRateLimiting("authenticated")
-    .WithMetadata(new RequireAntiforgeryTokenAttribute(true))
     .ExcludeFromDescription();
 app.MapFallbackToFile("index.html");
 

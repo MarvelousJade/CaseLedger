@@ -1,4 +1,3 @@
-using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.OpenApi;
 using Swashbuckle.AspNetCore.SwaggerGen;
 
@@ -12,7 +11,6 @@ public sealed class AntiforgeryOperationFilter : IOperationFilter
     {
         operation.Parameters ??= [];
         if (!IsUnsafeMethod(context.ApiDescription.HttpMethod) ||
-            !RequiresAntiforgery(context) ||
             operation.Parameters.Any(parameter =>
                 string.Equals(parameter.Name, HeaderName, StringComparison.OrdinalIgnoreCase)))
         {
@@ -32,11 +30,6 @@ public sealed class AntiforgeryOperationFilter : IOperationFilter
             }
         });
     }
-
-    private static bool RequiresAntiforgery(OperationFilterContext context) =>
-        context.ApiDescription.ActionDescriptor.EndpointMetadata
-            .OfType<IAntiforgeryMetadata>()
-            .Any(metadata => metadata.RequiresValidation);
 
     private static bool IsUnsafeMethod(string? method) =>
         method is not null &&

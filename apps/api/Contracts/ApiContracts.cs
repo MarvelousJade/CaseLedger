@@ -6,6 +6,8 @@ public sealed record LoginRequest(string? Email, string? Password);
 
 public sealed record AntiforgeryTokenResponse(string Token);
 
+public sealed record AccessTokenResponse(string AccessToken, DateTime ExpiresAt);
+
 public sealed record AuthCapabilitiesResponse(
     bool DemoLoginEnabled,
     bool EntraEnabled,
@@ -63,6 +65,12 @@ public sealed class CaseListQuery
 
     [FromQuery(Name = "pageSize")]
     public int? PageSize { get; init; }
+
+    [FromQuery(Name = "sortBy")]
+    public string? SortBy { get; init; }
+
+    [FromQuery(Name = "sortDirection")]
+    public string? SortDirection { get; init; }
 
     [FromQuery(Name = "offset")]
     public int? LegacyOffset { get; init; }
