@@ -74,6 +74,20 @@ services:
     volumes:
       - e2e-app-data:/data
 
+  graphql-gateway:
+    build:
+      context: .
+      dockerfile: apps/graphql-gateway/Dockerfile
+    environment:
+      CASELEDGER_API_URL: http://app:8080
+      CORS_ORIGINS: http://localhost:${CASELEDGER_E2E_APP_PORT:-5151},http://127.0.0.1:${CASELEDGER_E2E_APP_PORT:-5151}
+      JWT_SIGNING_KEY: caseledger-e2e-signing-key-do-not-use-outside-tests
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "127.0.0.1:${CASELEDGER_E2E_GATEWAY_PORT:-5155}:8080"
+
   audit-worker:
     build:
       context: .

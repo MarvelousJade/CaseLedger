@@ -74,6 +74,20 @@ services:
     volumes:
       - app-data:/data
 
+  graphql-gateway:
+    build:
+      context: .
+      dockerfile: apps/graphql-gateway/Dockerfile
+    environment:
+      CASELEDGER_API_URL: http://app:8080
+      CORS_ORIGINS: http://localhost:5150,http://127.0.0.1:5150,http://localhost:5173,http://127.0.0.1:5173
+      JWT_SIGNING_KEY: ${CASELEDGER_JWT_SIGNING_KEY:-caseledger-local-signing-key-change-me}
+    depends_on:
+      app:
+        condition: service_started
+    ports:
+      - "5155:8080"
+
   audit-worker:
     build:
       context: .

@@ -1,0 +1,35 @@
+{
+  "name": "@caseledger/graphql-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/src/index.js",
+    "build": "npm run codegen && tsc -p tsconfig.build.json && node scripts/copy-schema.mjs",
+    "typecheck": "tsc --noEmit",
+    "codegen": "graphql-codegen --config codegen.ts && node scripts/normalize-generated.mjs",
+    "test": "vitest run --pool=threads --maxWorkers=1 --no-file-parallelism",
+    "test:watch": "vitest --pool=threads --maxWorkers=1 --no-file-parallelism",
+    "check": "npm run codegen && npm run typecheck && npm test"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@envelop/core": "^5.5.1",
+    "dataloader": "^2.2.3",
+    "graphql": "^16.14.2",
+    "graphql-yoga": "^5.21.2",
+    "jose": "^6.2.4"
+  },
+  "devDependencies": {
+    "@graphql-codegen/cli": "^7.2.0",
+    "@graphql-codegen/typescript": "^6.1.0",
+    "@graphql-codegen/typescript-resolvers": "^6.1.0",
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
+  }
+}

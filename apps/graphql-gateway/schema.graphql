@@ -1,0 +1,179 @@
+scalar DateTime
+scalar UUID
+
+enum CaseStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum CaseSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum CaseSortField {
+  REFERENCE
+  TITLE
+  STATUS
+  SEVERITY
+  CREATED_AT
+  UPDATED_AT
+  DUE_AT
+}
+
+enum SortDirection {
+  ASC
+  DESC
+}
+
+enum DueState {
+  NO_DUE_DATE
+  ON_TRACK
+  DUE_SOON
+  OVERDUE
+  RESOLVED
+}
+
+input CasesFilter {
+  search: String
+  status: CaseStatus
+  severity: CaseSeverity
+}
+
+input CaseSortInput {
+  field: CaseSortField! = UPDATED_AT
+  direction: SortDirection! = DESC
+}
+
+input PaginationInput {
+  page: Int! = 1
+  pageSize: Int! = 20
+}
+
+input UpdateCaseStatusInput {
+  id: UUID!
+  status: CaseStatus!
+  expectedVersion: UUID!
+}
+
+input AssignInvestigatorInput {
+  id: UUID!
+  investigatorId: UUID
+  expectedVersion: UUID!
+}
+
+type Investigator {
+  id: UUID!
+  name: String!
+  email: String!
+  role: String!
+}
+
+type Evidence {
+  id: UUID!
+  fileName: String!
+  sizeBytes: Float!
+  mediaType: String!
+  sha256: String!
+  addedByName: String!
+  createdAt: DateTime!
+}
+
+type CaseEvent {
+  id: UUID!
+  eventType: String!
+  description: String!
+  actorName: String!
+  createdAt: DateTime!
+}
+
+type IntegrityAnalytics {
+  valid: Boolean!
+  checkedEvents: Int!
+  brokenAt: Int
+}
+
+type CaseAnalytics {
+  eventCount: Int!
+  evidenceCount: Int!
+  ageDays: Int!
+  dueState: DueState!
+  integrity: IntegrityAnalytics!
+}
+
+type CaseSummary {
+  id: UUID!
+  version: UUID!
+  reference: String!
+  title: String!
+  summary: String!
+  status: CaseStatus!
+  severity: CaseSeverity!
+  category: String!
+  investigator: Investigator
+  createdByName: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  dueAt: DateTime
+  tags: [String!]!
+}
+
+type Case {
+  id: UUID!
+  version: UUID!
+  reference: String!
+  title: String!
+  summary: String!
+  status: CaseStatus!
+  severity: CaseSeverity!
+  category: String!
+  investigator: Investigator
+  createdByName: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  dueAt: DateTime
+  tags: [String!]!
+  evidence: [Evidence!]!
+  events: [CaseEvent!]!
+  analytics: CaseAnalytics!
+}
+
+type PageInfo {
+  page: Int!
+  pageSize: Int!
+  totalPages: Int!
+  totalCount: Int!
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+}
+
+type CaseConnection {
+  nodes: [CaseSummary!]!
+  pageInfo: PageInfo!
+}
+
+type UpdateCaseStatusPayload {
+  case: Case!
+}
+
+type AssignInvestigatorPayload {
+  case: Case!
+}
+
+type Query {
+  cases(
+    filter: CasesFilter
+    sort: CaseSortInput = { field: UPDATED_AT, direction: DESC }
+    pagination: PaginationInput = { page: 1, pageSize: 20 }
+  ): CaseConnection!
+  case(id: UUID!): Case
+  investigators: [Investigator!]!
+}
+
+type Mutation {
+  updateCaseStatus(input: UpdateCaseStatusInput!): UpdateCaseStatusPayload!
+  assignInvestigator(input: AssignInvestigatorInput!): AssignInvestigatorPayload!
+}
