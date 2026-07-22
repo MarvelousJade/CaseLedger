@@ -29,6 +29,8 @@ class ApiError extends Error {
 const antiforgeryHeaderName = 'X-CSRF-TOKEN'
 const safeMethods = new Set(['GET', 'HEAD', 'OPTIONS', 'TRACE'])
 let antiforgeryTokenRequest: Promise<string> | null = null
+let gatewayAccessToken: { expiresAt: number; value: string } | null = null
+let gatewayAccessTokenRequest: Promise<string> | null = null
 
 async function acquireAntiforgeryToken(): Promise<string> {
   const response = await fetch('/api/auth/antiforgery', {
@@ -60,6 +62,30 @@ function getAntiforgeryToken(): Promise<string> {
   }
 
   return antiforgeryTokenRequest
+}
+
+export function getGatewayAccessToken(): Promise<string> {
+  if (gatewayAccessToken && gatewayAccessToken.expiresAt > Date.now() + 30_000) {
+    return Promise.resolve(gatewayAccessToken.value)
+  }
+  if (!gatewayAccessTokenRequest) {
+    gatewayAccessTokenRequest = acquireGatewayAccessToken()
+      .finally(() => {
+        gatewayAccessTokenRequest = null
+      })
+  }
+  return gatewayAccessTokenRequest
+}
+
+async function acquireGatewayAccessToken(): Promise<string> {
+  const payload = asRecord(await request<unknown>('/api/auth/token'))
+  const value = readString(payload, ['accessToken'])
+  const expiresAt = Date.parse(readString(payload, ['expiresAt']))
+  if (!value || Number.isNaN(expiresAt)) {
+    throw new ApiError('The server did not issue a valid gateway access token.', 500)
+  }
+  gatewayAccessToken = { expiresAt, value }
+  return value
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -353,7 +379,11 @@ export const api = {
   },
 
   async logout() {
-    await request<unknown>('/api/auth/logout', { method: 'POST' })
+    try {
+      await request<unknown>('/api/auth/logout', { method: 'POST' })
+    } finally {
+      gatewayAccessToken = null
+    }
   },
 
   async getUsers() {

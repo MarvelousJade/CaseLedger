@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ApolloProvider } from '@apollo/client/react'
 import { api } from './api'
 import { BrandMark, Icon, type IconName } from './Icons'
 import type { AuthCapabilities, User } from './types'
@@ -8,11 +9,13 @@ import { CreateCaseModal } from './components/CreateCaseModal'
 import { LoginPage } from './components/LoginPage'
 import { CasesPage } from './pages/CasesPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { GatewayCasesPage } from './pages/GatewayCasesPage'
 import { IntegrityPage } from './pages/IntegrityPage'
 import { OperationsPage } from './pages/OperationsPage'
+import { gatewayClient } from './graphql/client'
 import './App.css'
 
-type View = 'dashboard' | 'cases' | 'integrity' | 'operations'
+type View = 'dashboard' | 'cases' | 'gateway' | 'integrity' | 'operations'
 
 const unavailableAuthCapabilities: AuthCapabilities = {
   demoLoginEnabled: false,
@@ -52,12 +55,14 @@ function App() {
   }
 
   return (
-    <Workspace
-      user={user}
-      onLogout={async () => {
-        try { await api.logout() } finally { setUser(null); setSession('guest') }
-      }}
-    />
+    <ApolloProvider client={gatewayClient}>
+      <Workspace
+        user={user}
+        onLogout={async () => {
+          try { await api.logout() } finally { setUser(null); setSession('guest') }
+        }}
+      />
+    </ApolloProvider>
   )
 }
 
@@ -94,6 +99,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => Promise<voi
   const navItems: { id: View; label: string; icon: IconName }[] = [
     { id: 'dashboard', label: 'Overview', icon: 'dashboard' },
     { id: 'cases', label: 'Cases', icon: 'briefcase' },
+    { id: 'gateway', label: 'GraphQL', icon: 'hash' },
     { id: 'integrity', label: 'Integrity', icon: 'fingerprint' },
     ...(isAdmin ? [{ id: 'operations' as const, label: 'Operations', icon: 'activity' as const }] : []),
   ]
@@ -132,6 +138,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => Promise<voi
         <main className="workspace-main">
           {view === 'dashboard' && <DashboardPage user={user} refreshKey={refreshKey} onCreate={() => setCreateOpen(true)} onSelectCase={setSelectedCaseId} onViewCases={() => navigate('cases')} />}
           {view === 'cases' && <CasesPage refreshKey={refreshKey} onCreate={() => setCreateOpen(true)} onSelectCase={setSelectedCaseId} />}
+          {view === 'gateway' && <GatewayCasesPage onSelectCase={setSelectedCaseId} />}
           {view === 'integrity' && <IntegrityPage refreshKey={refreshKey} onSelectCase={setSelectedCaseId} />}
           {isAdmin && view === 'operations' && <OperationsPage />}
         </main>

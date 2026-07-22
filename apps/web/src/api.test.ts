@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { api } from './api'
+import { api, getGatewayAccessToken } from './api'
 
 const caseId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 const version = '11111111-1111-1111-1111-111111111111'
@@ -350,5 +350,20 @@ describe('case API contract', () => {
       '/api/cases/case-one/comments',
     ])
     expect(new Headers(fetchMock.mock.calls[2][1]?.headers).get('X-CSRF-TOKEN')).toBe('recovery-token')
+  })
+
+  it('reuses a valid short-lived gateway access token', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({
+      accessToken: 'gateway-token',
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+    }))
+
+    await expect(getGatewayAccessToken()).resolves.toBe('gateway-token')
+    await expect(getGatewayAccessToken()).resolves.toBe('gateway-token')
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith('/api/auth/token', expect.objectContaining({
+      credentials: 'include',
+    }))
   })
 })

@@ -1,0 +1,31 @@
+query GatewayCases(
+  $filter: CasesFilter
+  $sort: CaseSortInput
+  $pagination: PaginationInput
+) {
+  cases(filter: $filter, sort: $sort, pagination: $pagination) {
+    nodes {
+      id
+      version
+      reference
+      title
+      status
+      severity
+      category
+      investigator {
+        id
+        name
+      }
+      updatedAt
+      dueAt
+    }
+    pageInfo {
+      page
+      pageSize
+      totalPages
+      totalCount
+      hasNextPage
+      hasPreviousPage
+    }
+  }
+}
