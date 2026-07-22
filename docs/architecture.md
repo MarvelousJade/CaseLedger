@@ -3,13 +3,15 @@
 ## Goals and boundaries
 
 CaseLedger keeps case commands, authorization, audit creation, and persistence in the ASP.NET Core
-API while making audit verification independently executable and operationally observable.
+API, adds a narrow GraphQL aggregation boundary for clients, and keeps audit verification
+independently executable and operationally observable.
 
 Primary goals:
 
 - preserve an append-only, tamper-evident event chain for every case mutation;
 - retain uploaded evidence bytes behind generated object keys and compute their digest server-side;
 - reject lost updates with strong HTTP preconditions;
+- expose typed case aggregation without duplicating the complete REST API;
 - support zero-infrastructure SQLite development and a PostgreSQL deployment path;
 - queue immutable verification snapshots without a database/broker dual-write;
 - process broker messages safely under at-least-once delivery;
@@ -19,13 +21,15 @@ Primary goals:
 
 Non-goals are evidence download and malware scanning, public registration, arbitrary
 user-configured webhook targets, an exactly-once delivery claim, automatic deployment without an
-operator-approved Azure subscription, and a production monitoring backend.
+operator-approved Azure subscription, replacing every REST endpoint with GraphQL, and a production
+monitoring backend.
 
 ## Runtime components
 
 ```mermaid
 flowchart LR
     UI[React client]
+    Gateway[Node.js/TypeScript<br/>GraphQL gateway]
     API[ASP.NET Core API]
     ApiDb[(API database)]
     Objects[(Local files or<br/>Azure Blob Storage)]
@@ -34,7 +38,9 @@ flowchart LR
     WorkerDb[(PostgreSQL<br/>audit_worker schema)]
     Hook[Fixed webhook destination]
 
-    UI -->|REST + GraphQL; multipart uploads| API
+    UI -->|typed case operations| Gateway
+    Gateway -->|JWT-forwarded REST| API
+    UI -->|existing REST + dashboard; multipart uploads| API
     API -->|server hash + evidence bytes| Objects
     API -->|case + verification job + request outbox| ApiDb
     ApiDb -->|request outbox dispatcher| Broker
@@ -49,8 +55,9 @@ flowchart LR
 
 ### React client
 
-The React 19/TypeScript client uses REST for commands and case details and one GraphQL query for
-dashboard aggregation. Evidence registration sends a multipart file upload; the browser does not
+The React 19/TypeScript client retains the established REST workflows and .NET dashboard query. One
+Apollo Client page exercises the Node gateway's typed case filtering, sorting, and pagination.
+Evidence registration still sends a multipart file upload directly to the API; the browser does not
 provide the authoritative digest.
 
 When asynchronous messaging is enabled, **Verify now** creates a verification job. The client joins
@@ -59,15 +66,29 @@ the authenticated `/hubs/cases` SignalR group for that case and reloads the job 
 unavailable real-time connection does not strand the interface. If queuing returns `503` because
 messaging is disabled, the client calls the synchronous `/audit/verify` endpoint instead.
 
+### Node.js GraphQL gateway
+
+GraphQL Yoga exposes `cases`, `case`, `investigators`, `updateCaseStatus`, and
+`assignInvestigator`. The combined case resolver assembles details, events, evidence, analytics, and
+integrity from existing REST resources. Request-scoped DataLoaders cache duplicate case/audit calls
+and batch user directory reads, avoiding repeated upstream requests without adding a second data
+store.
+
+The gateway validates schema inputs before contacting REST and maps expected upstream failures to
+stable GraphQL error codes. It verifies short-lived HMAC JWTs issued by the API, applies resolver
+role checks, and forwards the bearer token so the ASP.NET Core API remains the final authorization
+boundary. GraphQL Code Generator produces resolver and Apollo operation types from the checked-in
+schema. Subscriptions, federation, and a duplicate persistence layer are intentionally absent.
+
 ### ASP.NET Core API
 
-The API owns cookie sessions and role claims, identity-bound anti-forgery validation, Problem Details
-responses, case validation and ETag preconditions, EF Core persistence, audit creation, GraphQL
-dashboard aggregation, OpenAPI, structured logs, and OpenTelemetry instrumentation. An anonymous
-token endpoint pairs a request token with an HTTP-only antiforgery cookie; every unsafe `/api`
-request and the GraphQL POST require the matching header. The React client and bundled Swagger UI
-obtain the token automatically, including before login and again after the authenticated identity
-changes.
+The API owns cookie sessions and role claims, short-lived gateway JWT issuance, identity-bound
+anti-forgery validation, Problem Details responses, case validation and ETag preconditions, EF Core
+persistence, audit creation, the existing GraphQL dashboard aggregate, OpenAPI, structured logs, and
+OpenTelemetry instrumentation. The anonymous antiforgery endpoint pairs a request token with an
+HTTP-only cookie; every unsafe cookie-authenticated request requires the matching header. Bearer
+requests use JWT validation instead. The React client and bundled Swagger UI obtain antiforgery
+tokens automatically, including after the authenticated identity changes.
 
 Evidence uploads are streamed through a bounded temporary file while the API computes SHA-256 and
 the actual byte count. The API then writes the object before committing its evidence row and audit
@@ -234,6 +255,11 @@ Unsafe browser requests also require a matching `X-CSRF-TOKEN` header and HTTP-o
 antiforgery cookie. Tokens are identity-bound, so the client reacquires one after login before its
 next mutation.
 
+An authenticated cookie session can request a short-lived JWT with the user's immutable ID, role,
+issuer, and audience. The Node gateway validates that token and forwards it to REST; the API then
+revalidates the bearer principal on every upstream call. Production requires an explicitly supplied
+signing key shared only between these two services.
+
 Optional Microsoft Entra OIDC validates the configured tenant and resolves a session only through
 the immutable `(tenant ID, object ID)` external-identity mapping. It never links by an email or
 display-name claim. Automatic provisioning is opt-in and can create only an active, external-only
@@ -255,24 +281,26 @@ message bodies, and uploaded content.
 
 ## Deployment modes
 
-| Mode | Database | Messaging/webhook behavior |
-| --- | --- | --- |
-| `npm run dev` | SQLite | Disabled by default; UI uses synchronous verification fallback |
-| Docker Compose | PostgreSQL | RabbitMQ worker and signed local webhook receiver enabled |
-| Render demo | Neon PostgreSQL | Disabled by default; UI keeps synchronous fallback |
-| Azure deployment package | Private PostgreSQL | Bicep configures Service Bus, Blob, Key Vault, managed identities, API and worker; package is not provisioned yet |
+| Mode | Database | GraphQL gateway | Messaging/webhook behavior |
+| --- | --- | --- | --- |
+| `npm run dev` | SQLite | Local Node process | Disabled by default; UI uses synchronous verification fallback |
+| Docker Compose | PostgreSQL | Container on port 5155 | RabbitMQ worker and signed local webhook receiver enabled |
+| Render demo | Neon PostgreSQL | Not deployed | Disabled by default; UI keeps synchronous fallback |
+| Azure deployment package | Private PostgreSQL | Not yet included | Bicep configures Service Bus, Blob, Key Vault, managed identities, API and worker; package is not provisioned yet |
 
 ## Test strategy
 
-1. Vitest and React Testing Library cover accessible client workflows, API parsing, SignalR
-   reconnection/subscription, two-second polling, and synchronous fallback behavior.
-2. API integration tests cover lifecycle commands, ETags, OpenAPI, authorization, audit tampering,
+1. Vitest and React Testing Library cover accessible client workflows, Apollo rendering, gateway
+   token reuse, API parsing, SignalR reconnection/subscription, polling, and synchronous fallback.
+2. Gateway integration tests execute the Yoga schema against a controlled REST server and cover
+   authentication, validation, role authorization, error mapping, aggregation, and DataLoader reuse.
+3. API integration tests cover lifecycle commands, ETags, OpenAPI, authorization, audit tampering,
    transactional scheduling/outbox behavior, RabbitMQ and Service Bus result handling, idempotent
    result application, SignalR notification, and webhook signing/retry decisions.
-3. Worker tests cover strict contracts, cross-runtime snapshot digests, durable inbox/outbox
+4. Worker tests cover strict contracts, cross-runtime snapshot digests, durable inbox/outbox
    behavior, RabbitMQ topology, Service Bus settlement and scheduled retries, idempotency conflicts,
    retry exhaustion, and health state.
-4. Playwright uses disposable PostgreSQL, RabbitMQ, API, worker, and webhook-receiver containers. It
+5. Playwright uses disposable PostgreSQL, RabbitMQ, API, gateway, worker, and webhook-receiver containers. It
    covers a successful distributed workflow with server-hashed evidence, direct audit-row tampering, duplicate request/result
    replay without duplicate state or webhook delivery, and dead-lettering an invalid request.
 

@@ -1,6 +1,6 @@
 # CaseLedger
 
-CaseLedger is a collaborative case and evidence workspace with a tamper-evident activity trail. It combines a responsive React interface, an ASP.NET Core API, REST commands, a GraphQL dashboard, relational persistence, and a durable TypeScript audit-verification worker.
+CaseLedger is a collaborative case and evidence workspace with a tamper-evident activity trail. It combines a responsive React interface, a focused Node.js/TypeScript GraphQL gateway, an ASP.NET Core REST API, relational persistence, and a durable TypeScript audit-verification worker.
 
 ## Live demo
 
@@ -18,9 +18,10 @@ The free Render service may take about a minute to wake after inactivity. The ho
 ## What it demonstrates
 
 - React 19 and TypeScript 6 with responsive, accessible workflow states
-- ASP.NET Core 10 minimal APIs with cookie authentication and role authorization
-- Identity-bound anti-forgery tokens on every browser mutation, including login and GraphQL
-- REST for case commands and GraphQL for dashboard aggregation
+- ASP.NET Core 10 minimal APIs with cookie and JWT authentication plus role authorization
+- Identity-bound anti-forgery tokens for cookie-authenticated browser mutations
+- A GraphQL Yoga gateway that aggregates the existing REST API instead of replacing it
+- Typed case queries and mutations with GraphQL Code Generator, DataLoader, validation, and structured errors
 - EF Core with zero-configuration SQLite locally and PostgreSQL migrations for hosted deployments
 - Page-based case queries and strong ETag optimistic concurrency for updates
 - SHA-256 chained audit events with immutable tracked history
@@ -56,7 +57,8 @@ npm run dev
 
 Open `http://localhost:5173`. The API listens on `http://localhost:5150`; its Swagger UI is at
 `http://localhost:5150/swagger`, and the OpenAPI JSON document is at
-`http://localhost:5150/swagger/v1/swagger.json`. The first run creates and seeds a local SQLite
+`http://localhost:5150/swagger/v1/swagger.json`. The GraphQL gateway listens at
+`http://localhost:5155/graphql`, with a health probe at `http://localhost:5155/health`. The first run creates and seeds a local SQLite
 database automatically. This lightweight development mode leaves messaging and webhooks disabled;
 clicking **Verify now** falls back to in-process verification when the queue endpoint returns `503`.
 SQLite is intentionally disposable development storage. If an existing `caseledger.db` uses an
@@ -95,6 +97,7 @@ public demo. Microsoft Entra OIDC can instead be enabled with a strict tenant/ob
 ```mermaid
 flowchart LR
     Browser[React + TypeScript SPA]
+    Gateway[Node.js + TypeScript<br/>GraphQL gateway]
     API[ASP.NET Core API]
     Data[(API database)]
     Evidence[(Local files or<br/>Azure Blob Storage)]
@@ -103,8 +106,9 @@ flowchart LR
     WorkerData[(Worker inbox +<br/>result outbox)]
     Webhook[Fixed webhook destination]
 
-    Browser -->|REST commands| API
-    Browser -->|GraphQL dashboard| API
+    Browser -->|typed case queries + mutations| Gateway
+    Gateway -->|JWT-forwarded REST| API
+    Browser -->|existing REST workflows + dashboard query| API
     Browser -->|multipart evidence bytes| API
     API -->|hash + private object write| Evidence
     API -->|case + job + request outbox| Data
@@ -117,7 +121,11 @@ flowchart LR
     API -->|signed delivery outbox| Webhook
 ```
 
-REST owns mutations and detailed case reads. GraphQL has one focused purpose: assembling dashboard counts, recent cases, and the workspace integrity signal. This keeps the two API styles justified instead of duplicating the same surface.
+The ASP.NET Core API remains the source of truth for authorization, validation, mutations, audit
+events, and persistence. The Node.js gateway exposes only the client-facing case operations that
+benefit from aggregation: paged case search, one combined case view, status and investigator
+updates, and investigator batching. The existing .NET dashboard query remains in place rather than
+forcing an unrelated rewrite.
 
 Creating a queued verification writes the job and its immutable request snapshot to the API database
 in one transaction. The worker stores each `jobId` and result atomically in its own PostgreSQL
@@ -149,6 +157,7 @@ See [architecture.md](docs/architecture.md) for the data model, trust boundary, 
 | `POST` | `/api/auth/login` | Create an HTTP-only cookie session |
 | `GET` | `/api/auth/entra/login` | Begin optional Microsoft Entra OIDC sign-in |
 | `GET` | `/api/auth/me` | Return the signed-in user |
+| `GET` | `/api/auth/token` | Issue a short-lived gateway JWT for the current cookie session |
 | `POST` | `/api/auth/logout` | End the session |
 | `GET` | `/api/users` | List assignable users |
 | `GET` / `POST` | `/api/cases` | Page and search cases, or create one |
@@ -165,14 +174,16 @@ See [architecture.md](docs/architecture.md) for the data model, trust boundary, 
 | `POST` | `/api/admin/operations/verification-requests/{id}/replay` | Guardedly reactivate one API request-outbox failure |
 | `POST` | `/api/admin/operations/webhooks/{id}/replay` | Guardedly reactivate one webhook-outbox failure |
 | SignalR | `/hubs/cases` | Authenticated case-verification updates |
-| `POST` | `/graphql` | Query dashboard aggregates |
+| `POST` | `/graphql` on port `5150` | Query the existing dashboard aggregate |
+| `POST` | `/graphql` on port `5155` | Query or mutate cases through the Node.js gateway |
 | `GET` | `/health` | Anonymous health probe |
 | `GET` | `/swagger` | Interactive Swagger UI |
 | `GET` | `/swagger/v1/swagger.json` | OpenAPI v1 JSON document |
 
 ### Paging and concurrent updates
 
-`GET /api/cases` accepts `page` (one-based, default 1) and `pageSize` (1–100, default 50). Its response contains
+`GET /api/cases` accepts `page` (one-based, default 1), `pageSize` (1–100, default 50),
+`sortField`, and `sortDirection`. Its response contains
 `items`, `total`, `page`, `pageSize`, `totalPages`, `hasNextPage`, and `hasPreviousPage`.
 Search, status, and severity filters compose with paging; the React client returns to page one
 when a filter changes.
@@ -214,6 +225,20 @@ query Dashboard {
 
 Validation and authorization failures use Problem Details JSON.
 
+### GraphQL gateway surface
+
+The gateway schema intentionally covers a small aggregation boundary:
+
+- `cases(filter, sort, pagination)` for server-side discovery;
+- `case(id)` for details, events, evidence, analytics, and integrity;
+- `updateCaseStatus` for authenticated users;
+- `assignInvestigator` for administrators;
+- `investigators` for assignable users.
+
+Apollo Client obtains a short-lived JWT from the authenticated .NET session. The gateway validates
+its issuer, audience, signature, and role, then forwards the same bearer token to REST. Its
+request-scoped DataLoaders cache duplicate case/audit reads and batch investigator lookups.
+
 ## Independent audit verification
 
 Export a case audit as an administrator, then run:
@@ -232,6 +257,7 @@ Install dependencies once, then run the fast repository checks:
 npm ci
 npm ci --prefix apps/web
 npm ci --prefix apps/audit-worker
+npm ci --prefix apps/graphql-gateway
 npm run check
 ```
 
@@ -239,6 +265,7 @@ That single command runs:
 
 - TypeScript lint and a production frontend build
 - Vitest/React Testing Library component and API-client tests in jsdom
+- Gateway type generation, type checking, and REST-backed GraphQL integration tests
 - .NET build plus API contract, lifecycle, telemetry, rate-limiting, and tampering tests
 - TypeScript worker contract, durability, RabbitMQ, and Azure Service Bus tests
 - Independent Node.js verifier tests and signed webhook-receiver tests
@@ -268,7 +295,7 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Open `http://localhost:5150`. The stack also exposes RabbitMQ management at
+Open `http://localhost:5150`; the GraphQL gateway is at `http://localhost:5155/graphql`. The stack also exposes RabbitMQ management at
 `http://localhost:15672`, worker health at `http://localhost:5152/health`, and webhook-receiver
 metadata at `http://localhost:5153/deliveries`. Docker remains optional; `npm run dev` uses SQLite
 and the synchronous verification fallback.
@@ -299,6 +326,7 @@ tenant.
 apps/
   api/                  ASP.NET Core API, persistence, outbox, SignalR, webhooks
   audit-worker/         TypeScript verifier worker and PostgreSQL inbox/outbox
+  graphql-gateway/      Node.js/TypeScript GraphQL-to-REST aggregation layer
   web/                  React and TypeScript interface
 tests/api/              End-to-end API and tamper-detection tests
 tests/e2e/              PostgreSQL/RabbitMQ Playwright and resilience workflows
@@ -325,6 +353,7 @@ render.yaml             Render Blueprint configuration
 - Seeded cookie authentication keeps local and Render demonstrations immediately testable. Production demo login defaults off; optional Entra OIDC maps only a configured tenant and immutable object ID, without email-based account linking. Cookie principals are checked against current user status and role on every request, and unsafe browser requests require an identity-bound anti-forgery token. Administrator-managed identity lifecycle remains future work.
 - Broker and webhook delivery are at least once. Consumers use stable idempotency identifiers. Administrators can inspect and guard-replay API-owned request/webhook failures; broker-native dead-letter queues still require deliberate provider tooling and must not be blindly replayed.
 - The Azure deployment package is validated infrastructure-as-code, not a claim that an Azure environment has been provisioned or paid for.
+- The Node.js gateway is wired into local development, Compose, E2E infrastructure, and CI. The current Render and Azure manifests still deploy the existing API topology only.
 - Local telemetry deliberately records bounded operational attributes, identifiers, counts, and timings—not filenames, email addresses, request secrets, credentials, or uploaded content.
 
 ## License

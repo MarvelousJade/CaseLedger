@@ -11,6 +11,7 @@ From the repository root:
 npm ci
 npm ci --prefix apps/web
 npm ci --prefix apps/audit-worker
+npm ci --prefix apps/graphql-gateway
 npm run check
 ```
 
@@ -18,14 +19,16 @@ Useful focused commands:
 
 ```powershell
 npm test --prefix apps/web
+npm run check --prefix apps/graphql-gateway
 dotnet test CaseLedger.slnx
 npm test --prefix apps/audit-worker
 npm test --prefix tools/audit-verifier
 npm test --prefix tools/webhook-receiver
 ```
 
-`npm run check` runs frontend lint/build/tests, the .NET build and API suite, worker type checking and
-tests, the independent verifier tests, and webhook-receiver tests.
+`npm run check` runs frontend lint/build/tests, gateway generation/build/integration tests, the .NET
+build and API suite, worker type checking and tests, the independent verifier tests, and
+webhook-receiver tests.
 
 ## Lightweight development
 
@@ -40,11 +43,19 @@ Endpoints:
 - API process health: `http://localhost:5150/health`
 - Swagger UI: `http://localhost:5150/swagger`
 - OpenAPI JSON: `http://localhost:5150/swagger/v1/swagger.json`
+- GraphQL gateway: `http://localhost:5155/graphql`
+- GraphQL gateway health: `http://localhost:5155/health`
 
 This mode uses SQLite. Messaging and webhooks are disabled by default, so the queue endpoint returns
 `503` and the React client falls back to synchronous audit verification. Swagger uses the same
 cookie session as the client. Its request interceptor obtains an antiforgery token automatically,
 so use the login operation before calling protected routes.
+
+The React client exchanges its authenticated cookie session for a short-lived gateway JWT. For
+standalone gateway runs, `CASELEDGER_API_URL`, `JWT_SIGNING_KEY`, `JWT_ISSUER`, `JWT_AUDIENCE`,
+`CORS_ORIGINS`, `HOST`, and `PORT` configure the upstream and listener. The signing key, issuer, and
+audience must match `Authentication__Jwt` in the API. Development defaults are local-only;
+production startup requires a signing key of at least 32 characters.
 
 SQLite files are disposable development storage and are not migrated in place. At startup,
 CaseLedger compares the existing tables and columns with the current model and stops before seeding
@@ -72,6 +83,8 @@ The stack exposes only development endpoints:
 | --- | --- |
 | Application | `http://localhost:5150` |
 | Swagger | `http://localhost:5150/swagger` |
+| GraphQL gateway | `http://localhost:5155/graphql` |
+| GraphQL gateway health | `http://localhost:5155/health` |
 | RabbitMQ AMQP | `127.0.0.1:5672` |
 | RabbitMQ management | `http://localhost:15672` |
 | Audit-worker health | `http://localhost:5152/health` |
@@ -86,9 +99,10 @@ Check readiness and follow logs:
 
 ```powershell
 Invoke-RestMethod http://localhost:5150/health
+Invoke-RestMethod http://localhost:5155/health
 Invoke-RestMethod http://localhost:5152/health
 Invoke-RestMethod http://localhost:5153/health
-docker compose logs --follow app audit-worker rabbitmq webhook-receiver
+docker compose logs --follow app graphql-gateway audit-worker rabbitmq webhook-receiver
 ```
 
 The API process probe confirms that the process is serving requests. The worker probe returns `200`
@@ -294,7 +308,8 @@ volumes.
 
 If Windows or another local service reserves those host ports, set
 `CASELEDGER_E2E_APP_PORT`, `CASELEDGER_E2E_RABBITMQ_PORT`,
-`CASELEDGER_E2E_RABBITMQ_MANAGEMENT_PORT`, and `CASELEDGER_E2E_WEBHOOK_PORT` before running the
+`CASELEDGER_E2E_GATEWAY_PORT`, `CASELEDGER_E2E_RABBITMQ_MANAGEMENT_PORT`, and
+`CASELEDGER_E2E_WEBHOOK_PORT` before running the
 suite. Compose, health checks, browser requests, and broker/webhook helpers use the overrides
 consistently.
 
@@ -330,6 +345,10 @@ The current public demo is an image-backed Render service. CI publishes immutabl
 images to GHCR, and the API image is selected for Render only after the repository checks pass.
 The service has no hosted worker or broker; messaging and webhooks therefore stay disabled and the
 client uses synchronous verification fallback.
+
+The Render service currently hosts only the existing API/SPA image. It does not deploy the Node.js
+gateway, so the gateway page is a local/Compose capability until a separate hosted service and URL
+are configured.
 
 Render currently uses the local evidence provider without a persistent disk. Uploaded bytes can be
 lost when the free service is replaced or recycled even while Neon retains the evidence metadata;
