@@ -6,6 +6,12 @@ this project extracts a privacy-minimal read model into SQL Server, applies
 shared T-SQL warehouse transformations, and serves governed reporting marts to
 Power BI and Excel.
 
+## Live dashboard
+
+[![Open the interactive CaseLedger Analytics dashboard](docs/screenshots/operations-overview.png)](https://app.powerbi.com/view?r=eyJrIjoiMTM2OGNmZmUtNjhkOC00ZmJiLTk2MmItMmE4NWQ4NjUxYjllIiwidCI6IjNkNmIxN2QxLWU2NGUtNGIxYS1iNjNkLWI2YzMyOGFjNWIyMiJ9)
+
+[Open the interactive Power BI dashboard](https://app.powerbi.com/view?r=eyJrIjoiMTM2OGNmZmUtNjhkOC00ZmJiLTk2MmItMmE4NWQ4NjUxYjllIiwidCI6IjNkNmIxN2QxLWU2NGUtNGIxYS1iNjNkLWI2YzMyOGFjNWIyMiJ9)
+
 ## What is implemented
 
 - Closed-window incremental extraction from five read-only PostgreSQL views.
