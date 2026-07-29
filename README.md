@@ -41,6 +41,21 @@ The free Render service may take about a minute to wake after inactivity. The ho
 - An Azure Bicep and GitHub OIDC deployment package using managed identities and Key Vault
 - API integration and Playwright browser tests covering real workflows, PostgreSQL, and deliberate audit tampering
 
+## Verified outcomes
+
+- Prevented silent data loss during conflicting edits by rejecting stale writes with strong ETags
+  and returning the latest version so the client can explain the conflict and recover safely.
+- Absorbed duplicate verification requests, worker results, and signed-webhook replays without
+  duplicating durable effects, while rejecting reuse of an idempotency identifier with different
+  content.
+- Detected changed audit content, broken hash links, missing or reordered sequences, and mismatched
+  projections with an independent verifier instead of trusting the application database.
+- Re-verified 192 automated tests locally on July 29, 2026: 95 .NET API, 41 React client, 7 GraphQL
+  gateway, 37 audit-worker, 9 independent-verifier, and 3 signed-webhook tests.
+
+The test count excludes the separate Docker-backed Playwright workflows, so it does not inflate the
+measured total with browser scenarios that were not part of this local run.
+
 ## Run locally
 
 Prerequisites:
