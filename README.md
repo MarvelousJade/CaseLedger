@@ -15,6 +15,14 @@ The free Render service may take about a minute to wake after inactivity. The ho
 
 ![CaseLedger dashboard](docs/screenshots/dashboard.png)
 
+## Analytics companion
+
+[CaseLedger Analytics](https://github.com/MarvelousJade/CaseLedger-Analytics)
+is the separately deployable ETL, SQL Server warehouse, Power BI, Excel, and
+Azure Data Factory companion. It reads only the
+[versioned PostgreSQL analytics contract](contracts/analytics/v1/README.md);
+CaseLedger remains the operational system of record and owns that contract.
+
 ## What it demonstrates
 
 - React 19 and TypeScript 6 with responsive, accessible workflow states
@@ -308,6 +316,7 @@ docs/                   Architecture, operations, ADRs, and screenshots
 ops/observability/      Local Grafana dashboard provisioning
 .github/workflows/      CI and container image publishing
 infra/azure/            Bicep, validation, and GitHub OIDC bootstrap package
+contracts/analytics/    Versioned, privacy-minimal reporting export views
 compose.yaml            PostgreSQL, RabbitMQ, API, worker, and webhook receiver
 compose.e2e.yaml        Disposable distributed browser-test stack
 compose.observability.yaml  Local OpenTelemetry/Grafana overlay
