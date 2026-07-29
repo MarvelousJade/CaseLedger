@@ -565,10 +565,6 @@ export const api = {
   },
 }
 
-export function isUnauthorised(error: unknown) {
-  return error instanceof ApiError && (error.status === 401 || error.status === 403)
-}
-
 export function isPreconditionFailed(error: unknown) {
   return typeof error === 'object' && error !== null && 'status' in error && error.status === 412
 }

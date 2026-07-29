@@ -1,4 +1,4 @@
-import type { Channel, Options, Replies } from "amqplib";
+import type { Options, Replies } from "amqplib";
 
 export const AUDIT_EXCHANGE = "caseledger.audit";
 export const RETRY_EXCHANGE = "caseledger.audit.retry";
@@ -81,8 +81,4 @@ export async function assertAuditTopology(channel: TopologyChannel): Promise<voi
 
 export function retryTierForAttempt(attempt: number): RetryTier | null {
   return RETRY_TIERS[attempt] ?? null;
-}
-
-export function asTopologyChannel(channel: Channel): TopologyChannel {
-  return channel;
 }
