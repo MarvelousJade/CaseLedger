@@ -2,7 +2,6 @@ using CaseLedger.Api.Data;
 using CaseLedger.Api.EvidenceStorage;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -46,7 +45,8 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
             var values = new Dictionary<string, string?>
             {
                 ["Database:Provider"] = "Sqlite",
-                ["ConnectionStrings:CaseLedger"] = $"Data Source={databasePath}",
+                ["ConnectionStrings:CaseLedger"] =
+                    $"Data Source={databasePath};Pooling=False",
                 ["EvidenceStorage:Provider"] = "Local",
                 ["EvidenceStorage:Local:RootPath"] = evidenceStoragePath,
                 ["Authentication:DemoLoginEnabled"] =
@@ -71,7 +71,7 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
             services.RemoveAll<DbContextOptions<CaseLedgerDbContext>>();
             services.RemoveAll<CaseLedgerDbContext>();
             services.AddDbContext<CaseLedgerDbContext>(options =>
-                options.UseSqlite($"Data Source={databasePath}"));
+                options.UseSqlite($"Data Source={databasePath};Pooling=False"));
 
             services.RemoveAll<EvidenceStorageRuntimeOptions>();
             services.RemoveAll<IEvidenceObjectStore>();
@@ -98,7 +98,6 @@ public sealed class CaseLedgerFactory : WebApplicationFactory<Program>
             return;
         }
 
-        SqliteConnection.ClearAllPools();
         if (File.Exists(databasePath))
         {
             File.Delete(databasePath);
