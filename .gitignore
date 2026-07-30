@@ -7,8 +7,7 @@
 *.db-shm
 *.db-wal
 /apps/api/App_Data/
-.env
-.env.*
+.env*
 !.env.example
 *.pem
 *.pfx
