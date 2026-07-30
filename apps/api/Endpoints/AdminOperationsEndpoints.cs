@@ -80,7 +80,7 @@ public static class AdminOperationsEndpoints
         }
 
         var queryLimit = offset + request.PageSize;
-        var now = UtcNow(timeProvider);
+        var now = UtcTimestamp.Now(timeProvider);
         var failures = new List<OperationalFailureResponse>();
         var total = 0;
 
@@ -259,7 +259,7 @@ public static class AdminOperationsEndpoints
             return AuthenticationRequired();
         }
 
-        var now = UtcNow(timeProvider);
+        var now = UtcTimestamp.Now(timeProvider);
         return await ExecuteReplayAsync(async () =>
         {
             await using var transaction = await db.Database.BeginTransactionAsync(
@@ -367,7 +367,7 @@ public static class AdminOperationsEndpoints
             return AuthenticationRequired();
         }
 
-        var now = UtcNow(timeProvider);
+        var now = UtcTimestamp.Now(timeProvider);
         return await ExecuteReplayAsync(async () =>
         {
             await using var transaction = await db.Database.BeginTransactionAsync(
@@ -488,7 +488,7 @@ public static class AdminOperationsEndpoints
         }
         else
         {
-            expectedDeadLetteredAt = NormalizeUtcToMicroseconds(request.DeadLetteredAt.Value);
+            expectedDeadLetteredAt = UtcTimestamp.Normalize(request.DeadLetteredAt.Value);
         }
 
         reason = request.Reason?.Trim() ?? string.Empty;
@@ -664,22 +664,6 @@ public static class AdminOperationsEndpoints
 
     private static bool HasActiveLease(DateTime? lockedUntil, DateTime now) =>
         lockedUntil is not null && lockedUntil >= now;
-
-    private static DateTime UtcNow(TimeProvider timeProvider) =>
-        NormalizeUtcToMicroseconds(timeProvider.GetUtcNow().UtcDateTime);
-
-    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
-    {
-        var utc = value.Kind switch
-        {
-            DateTimeKind.Utc => value,
-            DateTimeKind.Local => value.ToUniversalTime(),
-            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
-        };
-        return new DateTime(
-            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
-    }
 
     private static IResult ReplayConflict() => Results.Problem(
         statusCode: StatusCodes.Status409Conflict,

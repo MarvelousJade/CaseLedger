@@ -16,7 +16,7 @@ public sealed class WebhookDispatchProcessor(
     public async Task<int> DispatchBatchAsync(
         CancellationToken cancellationToken = default)
     {
-        var now = UtcNow();
+        var now = UtcTimestamp.Now(timeProvider);
         var candidateIds = await db.WebhookDeliveries
             .AsNoTracking()
             .Where(item =>
@@ -133,7 +133,7 @@ public sealed class WebhookDispatchProcessor(
         Guid lockId,
         CancellationToken cancellationToken)
     {
-        var deliveredAt = UtcNow();
+        var deliveredAt = UtcTimestamp.Now(timeProvider);
         return db.WebhookDeliveries
             .Where(item =>
                 item.Id == delivery.Id &&
@@ -156,7 +156,7 @@ public sealed class WebhookDispatchProcessor(
         bool terminal,
         CancellationToken cancellationToken)
     {
-        var now = UtcNow();
+        var now = UtcTimestamp.Now(timeProvider);
         var attemptCount = delivery.AttemptCount + 1;
         var deadLettered = terminal ||
             attemptCount >= options.Value.MaxAttempts;
@@ -164,7 +164,7 @@ public sealed class WebhookDispatchProcessor(
             ? delivery.NextAttemptAt
             : now.AddSeconds(
                 Math.Min(300, Math.Pow(2, Math.Min(attemptCount, 8))));
-        var safeErrorCode = IsSanitizedCode(errorCode)
+        var safeErrorCode = DeliveryErrorCode.IsSafe(errorCode)
             ? errorCode
             : "WEBHOOK_DELIVERY_FAILED";
 
@@ -188,19 +188,4 @@ public sealed class WebhookDispatchProcessor(
             safeErrorCode,
             deadLettered);
     }
-
-    private DateTime UtcNow()
-    {
-        var value = timeProvider.GetUtcNow().UtcDateTime;
-        return new DateTime(
-            value.Ticks - value.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
-    }
-
-    private static bool IsSanitizedCode(string value) =>
-        value.Length is > 0 and <= 80 &&
-        value.All(character =>
-            character is >= 'A' and <= 'Z' ||
-            character is >= '0' and <= '9' ||
-            character == '_');
 }

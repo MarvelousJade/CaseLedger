@@ -63,7 +63,7 @@ public sealed partial class AuditVerificationResultHandler(
             throw Invalid("RESULT_ID_COLLISION");
         }
 
-        var completedAt = NormalizeUtcToMicroseconds(result.CompletedAt.UtcDateTime);
+        var completedAt = UtcTimestamp.Normalize(result.CompletedAt.UtcDateTime);
         var expected = ExpectedState(result, completedAt);
         if (job.ResultId is not null)
         {
@@ -87,8 +87,7 @@ public sealed partial class AuditVerificationResultHandler(
         job.CompletedAt = completedAt;
         if (webhookOptions?.Value.Enabled == true)
         {
-            var createdAt = NormalizeUtcToMicroseconds(
-                (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime);
+            var createdAt = UtcTimestamp.Now(timeProvider ?? TimeProvider.System);
             db.WebhookDeliveries.Add(
                 VerificationWebhookV1.CreateDelivery(job, createdAt));
         }
@@ -146,16 +145,6 @@ public sealed partial class AuditVerificationResultHandler(
 
     private static string SanitizeErrorCode(string value) =>
         ErrorCodeRegex().IsMatch(value) ? value : "WORKER_ERROR";
-
-    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
-    {
-        var utc = value.Kind == DateTimeKind.Utc
-            ? value
-            : value.ToUniversalTime();
-        return new DateTime(
-            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
-    }
 
     private static ResultMessageValidationException Invalid(string code) =>
         new(code, "The verification result cannot be applied to the requested job.");

@@ -64,7 +64,7 @@ public sealed class ExternalIdentityService(
             Provider = MicrosoftEntraProvider,
             TenantId = tenantId,
             ObjectId = objectId,
-            CreatedAt = NormalizeUtcToMicroseconds(clock.GetUtcNow().UtcDateTime)
+            CreatedAt = UtcTimestamp.Now(clock)
         };
 
         db.Users.Add(user);
@@ -116,18 +116,5 @@ public sealed class ExternalIdentityService(
         tenantId.TryWriteBytes(input[..16]);
         objectId.TryWriteBytes(input[16..]);
         return Convert.ToHexString(SHA256.HashData(input)).ToLowerInvariant();
-    }
-
-    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
-    {
-        var utc = value.Kind switch
-        {
-            DateTimeKind.Utc => value,
-            DateTimeKind.Local => value.ToUniversalTime(),
-            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
-        };
-        return new DateTime(
-            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
     }
 }

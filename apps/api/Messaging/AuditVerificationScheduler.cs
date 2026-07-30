@@ -65,7 +65,7 @@ public sealed class AuditVerificationScheduler(
         }
 
         var snapshotSha256 = ComputeSnapshotSha256(eventsBySequence);
-        var requestedAt = NormalizeUtcToMicroseconds(DateTime.UtcNow);
+        var requestedAt = UtcTimestamp.Normalize(DateTime.UtcNow);
         var jobId = Guid.NewGuid();
         var effectiveCorrelationId = string.IsNullOrWhiteSpace(correlationId)
             ? Activity.Current?.TraceId.ToString() ?? jobId.ToString("N")
@@ -163,31 +163,11 @@ public sealed class AuditVerificationScheduler(
             auditEvent.Description,
             FormatGuid(auditEvent.ActorId),
             auditEvent.ActorName,
-            FormatUtc(auditEvent.CreatedAt),
+            UtcTimestamp.Format(auditEvent.CreatedAt),
             auditEvent.PreviousHash,
             auditEvent.Hash,
             auditEvent.CanonicalData);
 
     private static string FormatGuid(Guid value) =>
         value.ToString("D").ToLowerInvariant();
-
-    private static string FormatUtc(DateTime value) =>
-        NormalizeUtc(value).ToString("O", CultureInfo.InvariantCulture);
-
-    private static DateTime NormalizeUtc(DateTime value)
-    {
-        var utc = value.Kind switch
-        {
-            DateTimeKind.Utc => value,
-            DateTimeKind.Local => value.ToUniversalTime(),
-            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
-        };
-
-        return new DateTime(
-            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
-    }
-
-    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
-        => NormalizeUtc(value);
 }

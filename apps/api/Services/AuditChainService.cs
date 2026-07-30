@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -39,7 +38,7 @@ public sealed class AuditChainService(
         var previousHash = caseRecord.AuditHeadHash;
 
         var id = eventId ?? Guid.NewGuid();
-        var timestamp = NormalizeUtc(createdAt ?? DateTime.UtcNow);
+        var timestamp = UtcTimestamp.Normalize(createdAt ?? DateTime.UtcNow);
         var canonicalData = CreateCanonicalData(
             id,
             caseId,
@@ -199,7 +198,7 @@ public sealed class AuditChainService(
             ["actorId"] = actor.Id.ToString("D"),
             ["actorName"] = actor.Name,
             ["caseId"] = caseId.ToString("D"),
-            ["createdAt"] = FormatUtc(createdAt),
+            ["createdAt"] = UtcTimestamp.Format(createdAt),
             ["data"] = normalizedData,
             ["description"] = description,
             ["eventId"] = eventId.ToString("D"),
@@ -220,7 +219,7 @@ public sealed class AuditChainService(
                 .OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .ToDictionary(pair => pair.Key, pair => NormalizeValue(pair.Value), StringComparer.Ordinal),
             IEnumerable<string> strings => strings.ToArray(),
-            DateTime timestamp => FormatUtc(timestamp),
+            DateTime timestamp => UtcTimestamp.Format(timestamp),
             Guid id => id.ToString("D"),
             _ => value
         };
@@ -241,7 +240,7 @@ public sealed class AuditChainService(
                    root.GetProperty("description").GetString() == auditEvent.Description &&
                    root.GetProperty("actorId").GetString() == auditEvent.ActorId.ToString("D") &&
                    root.GetProperty("actorName").GetString() == auditEvent.ActorName &&
-                   root.GetProperty("createdAt").GetString() == FormatUtc(auditEvent.CreatedAt) &&
+                   root.GetProperty("createdAt").GetString() == UtcTimestamp.Format(auditEvent.CreatedAt) &&
                    root.GetProperty("data").ValueKind == JsonValueKind.Object;
         }
         catch (Exception exception) when (
@@ -250,23 +249,6 @@ public sealed class AuditChainService(
             return false;
         }
     }
-
-    private static DateTime NormalizeUtc(DateTime value)
-    {
-        var utc = value.Kind switch
-        {
-            DateTimeKind.Utc => value,
-            DateTimeKind.Local => value.ToUniversalTime(),
-            _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
-        };
-
-        return new DateTime(
-            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
-    }
-
-    private static string FormatUtc(DateTime value) =>
-        NormalizeUtc(value).ToString("O", CultureInfo.InvariantCulture);
 
     private sealed record AuditHead(int Sequence, string Hash);
 }

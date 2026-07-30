@@ -35,7 +35,7 @@ public sealed class OutboxDispatchProcessor(
     public async Task<int> DispatchBatchAsync(
         CancellationToken cancellationToken = default)
     {
-        var now = UtcNow();
+        var now = UtcTimestamp.Now(timeProvider);
         var batchSize = Math.Clamp(options.Value.BatchSize, 1, 100);
         var leaseSeconds = Math.Clamp(options.Value.LeaseSeconds, 5, 300);
         var candidateIds = await db.OutboxMessages
@@ -86,7 +86,7 @@ public sealed class OutboxDispatchProcessor(
                         message.MessageType,
                         message.PayloadJson),
                     cancellationToken);
-                var publishedAt = UtcNow();
+                var publishedAt = UtcTimestamp.Now(timeProvider);
                 await db.OutboxMessages
                     .Where(item =>
                         item.Id == message.Id &&
@@ -120,7 +120,7 @@ public sealed class OutboxDispatchProcessor(
         Exception exception,
         CancellationToken cancellationToken)
     {
-        var now = UtcNow();
+        var now = UtcTimestamp.Now(timeProvider);
         var attemptCount = message.AttemptCount + 1;
         var maxAttempts = Math.Clamp(options.Value.MaxAttempts, 1, 100);
         var deadLettered = attemptCount >= maxAttempts;
@@ -130,7 +130,7 @@ public sealed class OutboxDispatchProcessor(
         var errorCode = exception is OutboxTransportException transportException
             ? transportException.ErrorCode
             : "PUBLISH_FAILED";
-        if (!IsSanitizedCode(errorCode))
+        if (!DeliveryErrorCode.IsSafe(errorCode))
         {
             errorCode = "PUBLISH_FAILED";
         }
@@ -155,19 +155,4 @@ public sealed class OutboxDispatchProcessor(
             errorCode,
             deadLettered);
     }
-
-    private DateTime UtcNow()
-    {
-        var value = timeProvider.GetUtcNow().UtcDateTime;
-        return new DateTime(
-            value.Ticks - value.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
-    }
-
-    private static bool IsSanitizedCode(string value) =>
-        value.Length is > 0 and <= 80 &&
-        value.All(character =>
-            character is >= 'A' and <= 'Z' ||
-            character is >= '0' and <= '9' ||
-            character == '_');
 }

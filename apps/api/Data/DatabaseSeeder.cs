@@ -346,24 +346,13 @@ public sealed class DatabaseSeeder(
             Provider = ExternalIdentityService.MicrosoftEntraProvider,
             TenantId = tenantId,
             ObjectId = objectId,
-            CreatedAt = NormalizeUtcToMicroseconds(
-                clock.GetUtcNow().UtcDateTime)
+            CreatedAt = UtcTimestamp.Now(clock)
         });
         await db.SaveChangesAsync(cancellationToken);
     }
 
     private static string GenerateDisabledAccountPassword() =>
         Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-
-    private static DateTime NormalizeUtcToMicroseconds(DateTime value)
-    {
-        var utc = value.Kind == DateTimeKind.Utc
-            ? value
-            : value.ToUniversalTime();
-        return new DateTime(
-            utc.Ticks - utc.Ticks % TimeSpan.TicksPerMicrosecond,
-            DateTimeKind.Utc);
-    }
 
     private static CaseRecord NewCase(
         int id,
